@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: sekai-music-server
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    plan: free
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 8080
+      - key: DATA_DIR
+        value: /opt/render/project/src/data
+    disk:
+      name: music-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 10
+    healthCheckPath: /health
+    maxShutdownDelay: 30
