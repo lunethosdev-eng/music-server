@@ -166,7 +166,8 @@ app.get('/api/lyrics', requireApiKey, async (req,res)=>{
 
 app.get('/', (_req,res)=>{
   const html = fs.readFileSync(path.join(ROOT,'index.html'),'utf8');
-  const injected = html.replace('<!-- API_KEY_INJECT -->', `<script>window.SE KAI_API_KEY=${JSON.stringify(API_KEY)};</script>`.replace('SE KAI','SEKAI'));
+  const injected = html.replace('<!-- API_KEY_INJECT -->', `<script>window.SEKAI_API_KEY=${JSON.stringify(API_KEY)};</script>`);
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.type('html').send(injected);
 });
 app.use((err, _req, res, _next) => {
@@ -175,4 +176,3 @@ app.use((err, _req, res, _next) => {
   res.status(status).json({ error: err.message || 'Solicitud no válida' });
 });
 app.listen(PORT,()=>console.log(`Sekai Music Server on :${PORT} · ${catalog.length} tracks`));
-
