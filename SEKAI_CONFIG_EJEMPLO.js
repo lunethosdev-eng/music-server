@@ -127,3 +127,4 @@ console.log('🎵 Sekai Music Server configurado en:', window.SEKAI_MUSIC_SERVER
 // En la consola del navegador (F12), ejecuta:
 // fetch(window.SEKAI_MUSIC_SERVER + '/health').then(r => r.json()).then(console.log)
 // Deberías ver: { ok: true, service: "sekai-music-server", tracks: 0 }
+
