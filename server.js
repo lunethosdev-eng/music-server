@@ -164,10 +164,15 @@ app.get('/api/lyrics', requireApiKey, async (req,res)=>{
   }catch(e){res.status(502).json({error:'Error al buscar lyrics'});}
 });
 
-app.get('/', (_req,res)=>res.sendFile(path.join(ROOT,'index.html')));
+app.get('/', (_req,res)=>{
+  const html = fs.readFileSync(path.join(ROOT,'index.html'),'utf8');
+  const injected = html.replace('<!-- API_KEY_INJECT -->', `<script>window.SE KAI_API_KEY=${JSON.stringify(API_KEY)};</script>`.replace('SE KAI','SEKAI'));
+  res.type('html').send(injected);
+});
 app.use((err, _req, res, _next) => {
   console.error(err);
   const status = err instanceof multer.MulterError ? 400 : 400;
   res.status(status).json({ error: err.message || 'Solicitud no válida' });
 });
 app.listen(PORT,()=>console.log(`Sekai Music Server on :${PORT} · ${catalog.length} tracks`));
+
