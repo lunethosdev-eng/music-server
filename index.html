@@ -6,7 +6,7 @@
 <div class="card"><h2>Catálogo</h2><div id="list"></div></div><div class="card"><h2>🔑 API para otras apps</h2><p class="muted">Sekai Server genera automáticamente una API Key segura para este servidor. Copia la clave y pega los ejemplos directamente en tu app o página web.</p><label>Tu API Key</label><div class="row"><input id="apiKey" readonly value="Cargando clave..."><button type="button" id="copyKey">Copiar API Key</button></div><p class="muted">Esta es una única clave para el usuario autorizado. No la publiques ni la compartas.</p><h3>Endpoints</h3><pre id="endpoints" style="white-space:pre-wrap;background:#0d1119;padding:14px;border-radius:12px;overflow:auto"></pre><h3>Ejemplo JavaScript listo para copiar</h3><pre id="jsExample" style="white-space:pre-wrap;background:#0d1119;padding:14px;border-radius:12px;overflow:auto"></pre><button type="button" id="copyExample">Copiar ejemplo</button><p class="muted">La clave se genera y guarda automáticamente en el servidor. Si la borras del almacenamiento del servidor, se generará otra.</p></div>
 <script>
 const $=s=>document.querySelector(s);
-const API_KEY=window.SEKAI_API_KEY||'';
+const API_KEY=String(window.SEKAI_API_KEY||'').trim();
 const authHeaders=()=>API_KEY?{'x-api-key':API_KEY}:{};
 const authUrl=(url)=>API_KEY?url+(url.includes('?')?'&':'?')+'api_key='+encodeURIComponent(API_KEY):url;
 function esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -14,7 +14,7 @@ async function load(){const r=await fetch('/api/catalog',{headers:authHeaders()}
 $('#form').onsubmit=async e=>{e.preventDefault();$('#status').textContent='Subiendo...';const r=await fetch('/api/upload',{method:'POST',headers:authHeaders(),body:new FormData(e.target)});const j=await r.json();$('#status').textContent=r.ok?'✓ Canción guardada en el servidor':'✕ '+(j.error||'Error');if(r.ok){e.target.reset();load()}};
 async function del(id){if(!confirm('¿Eliminar esta canción?'))return;await fetch('/api/tracks/'+encodeURIComponent(id),{method:'DELETE',headers:authHeaders()});load()}
 const base=location.origin;
-$('#apiKey').value=API_KEY||'No disponible';
+$('#apiKey').value=API_KEY||'No disponible: vuelve a desplegar el servidor';
 $('#endpoints').textContent=`GET ${base}/api/catalog
 GET ${base}/catalog.json
 GET ${base}/api/lyrics?artist=ARTISTA&title=CANCION
