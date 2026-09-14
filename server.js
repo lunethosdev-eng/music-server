@@ -3,6 +3,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
+const crypto = require('crypto');
 
 const PORT = process.env.PORT || 8787;
 const ROOT = __dirname;
@@ -10,15 +11,39 @@ const DATA_DIR = process.env.DATA_DIR || ROOT;
 const MUSIC_DIR = process.env.MUSIC_DIR || path.join(DATA_DIR, 'music');
 const COVERS_DIR = process.env.COVERS_DIR || path.join(DATA_DIR, 'covers');
 const CATALOG_FILE = process.env.CATALOG_FILE || path.join(DATA_DIR, 'catalog.json');
+const API_KEY_FILE = path.join(DATA_DIR, 'api-key.json');
+
+function getOrCreateApiKey() {
+  if (process.env.API_KEY && process.env.API_KEY.trim()) return process.env.API_KEY.trim();
+  try {
+    if (fs.existsSync(API_KEY_FILE)) {
+      const saved = JSON.parse(fs.readFileSync(API_KEY_FILE, 'utf8'));
+      if (saved && typeof saved.key === 'string' && saved.key.length >= 32) return saved.key;
+    }
+  } catch (_) {}
+  const key = crypto.randomBytes(32).toString('hex');
+  fs.writeFileSync(API_KEY_FILE, JSON.stringify({ key, createdAt: new Date().toISOString() }, null, 2), { mode: 0o600 });
+  console.log('API KEY (solo para el usuario autorizado):', key);
+  return key;
+}
+
+let API_KEY;
+
+function requireApiKey(req, res, next) {
+  const supplied = req.get('x-api-key') || req.query.api_key || '';
+  if (supplied !== API_KEY) return res.status(401).json({ error: 'API key inválida o faltante' });
+  next();
+}
 
 for (const d of [MUSIC_DIR, COVERS_DIR]) fs.mkdirSync(d, { recursive: true });
+API_KEY = getOrCreateApiKey();
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use('/music', express.static(MUSIC_DIR, { acceptRanges: true }));
-app.use('/covers', express.static(COVERS_DIR));
+app.use('/music', (req,res,next)=>{ if(API_KEY && req.query.api_key!==API_KEY && req.get('x-api-key')!==API_KEY) return res.status(401).end(); next(); }, express.static(MUSIC_DIR, { acceptRanges: true }));
+app.use('/covers', (req,res,next)=>{ if(API_KEY && req.query.api_key!==API_KEY && req.get('x-api-key')!==API_KEY) return res.status(401).end(); next(); }, express.static(COVERS_DIR));
 
 function cleanName(name) {
   return String(name || '')
@@ -65,8 +90,8 @@ function scanCatalog() {
       album: prev.album || '',
       year: prev.year || '',
       fileName,
-      file: `/music/${encodeURIComponent(fileName)}`,
-      cover: coverExists ? `/covers/${encodeURIComponent(coverName)}` : (prev.cover || null),
+      file: `/music/${encodeURIComponent(fileName)}${API_KEY ? `?api_key=${encodeURIComponent(API_KEY)}` : ''}`,
+      cover: coverExists ? `/covers/${encodeURIComponent(coverName)}${API_KEY ? `?api_key=${encodeURIComponent(API_KEY)}` : ''}` : (prev.cover || null),
       coverFile: coverExists ? coverName : (prev.coverFile || null),
       duration: prev.duration || null
     };
@@ -96,11 +121,11 @@ const upload = multer({
 });
 
 app.get('/health', (_req,res)=>res.json({ok:true, service:'sekai-music-server', tracks:catalog.length}));
-app.get('/api/catalog', (_req,res)=>res.json({source:'sekai-music-server', total:catalog.length, data:catalog}));
-app.get('/catalog.json', (_req,res)=>res.json(catalog));
-app.post('/api/rescan', (_req,res)=>{ catalog=scanCatalog(); res.json({ok:true,total:catalog.length,data:catalog}); });
+app.get('/api/catalog', requireApiKey, (_req,res)=>res.json({source:'sekai-music-server', total:catalog.length, data:catalog}));
+app.get('/catalog.json', requireApiKey, (_req,res)=>res.json(catalog));
+app.post('/api/rescan', requireApiKey, (_req,res)=>{ catalog=scanCatalog(); res.json({ok:true,total:catalog.length,data:catalog}); });
 
-app.post('/api/upload', upload.fields([{name:'song',maxCount:1},{name:'cover',maxCount:1}]), (req,res)=>{
+app.post('/api/upload', requireApiKey, upload.fields([{name:'song',maxCount:1},{name:'cover',maxCount:1}]), (req,res)=>{
   const song = req.files?.song?.[0];
   const cover = req.files?.cover?.[0];
   if (!song) return res.status(400).json({error:'Falta la canción'});
@@ -109,20 +134,25 @@ app.post('/api/upload', upload.fields([{name:'song',maxCount:1},{name:'cover',ma
   const album = String(req.body.album || '').trim();
   const year = String(req.body.year || '').trim();
   const id = `sekai-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
-  const track = { id, title, artist, album, year, fileName:song.filename, file:`/music/${encodeURIComponent(song.filename)}`, cover:cover?`/covers/${encodeURIComponent(cover.filename)}`:null, coverFile:cover?cover.filename:null, duration:null };
+  const track = { id, title, artist, album, year, fileName:song.filename, file:`/music/${encodeURIComponent(song.filename)}${API_KEY ? `?api_key=${encodeURIComponent(API_KEY)}` : ''}`, cover:cover?`/covers/${encodeURIComponent(cover.filename)}${API_KEY ? `?api_key=${encodeURIComponent(API_KEY)}` : ''}`:null, coverFile:cover?cover.filename:null, duration:null };
   catalog.push(track); writeCatalog(catalog);
   res.status(201).json({ok:true,track,total:catalog.length});
 });
 
-app.delete('/api/tracks/:id', (req,res)=>{
+app.delete('/api/tracks/:id', requireApiKey, (req,res)=>{
   const idx=catalog.findIndex(t=>String(t.id)===String(req.params.id));
   if(idx<0) return res.status(404).json({error:'Canción no encontrada'});
   const [t]=catalog.splice(idx,1);
-  for(const f of [t.fileName,t.coverFile]) if(f){const base=f.includes('/')?path.basename(f):f; const p=path.join(t.coverFile?COVERS_DIR:MUSIC_DIR,base); if(fs.existsSync(p)) fs.unlinkSync(p);}
+  for (const [fileName, dir] of [[t.fileName, MUSIC_DIR], [t.coverFile, COVERS_DIR]]) {
+    if (!fileName) continue;
+    const base = path.basename(String(fileName));
+    const filePath = path.join(dir, base);
+    if (filePath.startsWith(path.resolve(dir) + path.sep) && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  }
   writeCatalog(catalog); res.json({ok:true,total:catalog.length});
 });
 
-app.get('/api/lyrics', async (req,res)=>{
+app.get('/api/lyrics', requireApiKey, async (req,res)=>{
   const artist=String(req.query.artist||'').trim(), title=String(req.query.title||'').trim();
   if(!title) return res.status(400).json({error:'title requerido'});
   try{
@@ -135,5 +165,9 @@ app.get('/api/lyrics', async (req,res)=>{
 });
 
 app.get('/', (_req,res)=>res.sendFile(path.join(ROOT,'index.html')));
-app.use((_err,_req,res,_next)=>res.status(400).json({error:'Solicitud no válida'}));
+app.use((err, _req, res, _next) => {
+  console.error(err);
+  const status = err instanceof multer.MulterError ? 400 : 400;
+  res.status(status).json({ error: err.message || 'Solicitud no válida' });
+});
 app.listen(PORT,()=>console.log(`Sekai Music Server on :${PORT} · ${catalog.length} tracks`));
