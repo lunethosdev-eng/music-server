@@ -5,7 +5,7 @@ const path = require('path');
 const multer = require('multer');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
-const ws = require('ws'); // ← NECESARIO para Node 20
+const ws = require('ws');
 
 const PORT = process.env.PORT || 8787;
 const ROOT = __dirname;
@@ -36,7 +36,7 @@ const supabase =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
     ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
         realtime: {
-          transport: ws // ← FIX para Node 20
+          transport: ws
         }
       })
     : null;
@@ -455,8 +455,6 @@ async function refreshCatalog() {
 // MULTER
 // ===============================
 
-// memoryStorage permite enviar los archivos
-// a Supabase o guardarlos localmente.
 const storage = multer.memoryStorage();
 
 const upload = multer({
@@ -1102,6 +1100,46 @@ app.use(
 );
 
 // ===============================
+// KEEP-ALIVE (evita spin-down)
+// ===============================
+
+function startKeepAlive() {
+  // Solo se activa en producción (Render)
+  if (!process.env.RENDER_EXTERNAL_URL && !process.env.RENDER_EXTERNAL_HOSTNAME) {
+    console.log('Keep-alive desactivado (no estamos en Render)');
+    return;
+  }
+
+  const baseUrl =
+    process.env.RENDER_EXTERNAL_URL ||
+    `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`;
+
+  const pingUrl = `${baseUrl}/health`;
+
+  console.log(`Keep-alive activado → ping cada 14 minutos a ${pingUrl}`);
+
+  // 14 minutos = 14 * 60 * 1000 = 840000 ms
+  setInterval(async () => {
+    try {
+      const response = await fetch(pingUrl, {
+        method: 'GET',
+        headers: {
+          'User-Agent': 'SekaiKeepAlive/1.0'
+        }
+      });
+
+      if (response.ok) {
+        console.log(`[Keep-alive] Ping OK → ${new Date().toISOString()}`);
+      } else {
+        console.warn(`[Keep-alive] Respuesta ${response.status}`);
+      }
+    } catch (err) {
+      console.error('[Keep-alive] Error al hacer ping:', err.message);
+    }
+  }, 14 * 60 * 1000);
+}
+
+// ===============================
 // INICIAR SERVIDOR
 // ===============================
 
@@ -1115,5 +1153,8 @@ app.listen(
           : 'local'
       }`
     );
+
+    // Activar keep-alive
+    startKeepAlive();
   }
 );
