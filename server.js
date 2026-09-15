@@ -5,6 +5,7 @@ const path = require('path');
 const multer = require('multer');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
+const ws = require('ws'); // ← NECESARIO para Node 20
 
 const PORT = process.env.PORT || 8787;
 const ROOT = __dirname;
@@ -33,7 +34,11 @@ const SUPABASE_BUCKET = (
 
 const supabase =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+        realtime: {
+          transport: ws // ← FIX para Node 20
+        }
+      })
     : null;
 
 const useSupabase = Boolean(supabase);
@@ -234,7 +239,7 @@ function findCoverExt(title) {
       fs.existsSync(
         path.join(
           COVERS_DIR,
-          `${base}.${extension}`
+          `\( {base}. \){extension}`
         )
       )
     ) {
@@ -246,13 +251,13 @@ function findCoverExt(title) {
 }
 
 function localUrl(folder, filename) {
-  return `/${folder}/${encodeURIComponent(
+  return `/\( {folder}/ \){encodeURIComponent(
     filename
   )}?api_key=${encodeURIComponent(API_KEY)}`;
 }
 
 function publicStorageUrl(folder, filename) {
-  return `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${folder}/${encodeURIComponent(
+  return `\( {SUPABASE_URL}/storage/v1/object/public/ \){SUPABASE_BUCKET}/\( {folder}/ \){encodeURIComponent(
     filename
   )}`;
 }
@@ -283,7 +288,7 @@ function scanCatalog() {
 
     const id =
       previous.id ||
-      `sekai-${Date.now()}-${index}`;
+      `sekai-\( {Date.now()}- \){index}`;
 
     const coverName =
       previous.coverFile ||
@@ -609,17 +614,17 @@ app.post(
       ).trim();
 
       const id =
-        `sekai-${Date.now()}-${Math.random()
+        `sekai-\( {Date.now()}- \){Math.random()
           .toString(36)
           .slice(2, 8)}`;
 
       const songName =
-        `${Date.now()}-${cleanName(
+        `\( {Date.now()}- \){cleanName(
           song.originalname
         )}`;
 
       const coverName = cover
-        ? `${Date.now()}-${cleanName(
+        ? `\( {Date.now()}- \){cleanName(
             cover.originalname
           )}`
         : null;
