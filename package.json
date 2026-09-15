@@ -1,8 +1,8 @@
 {
   "name": "sekai-music-server",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "private": true,
-  "description": "Servidor de música para Sekai: catálogo, lyrics, upload y Supabase",
+  "description": "Servidor de música para Sekai: catálogo, lyrics, upload",
   "main": "server.js",
   "author": "Yyyy",
   "license": "MIT",
@@ -12,13 +12,14 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "echo \"No tests specified\""
+    "test": "node --check server.js"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.57.0",
     "cors": "^2.8.5",
     "express": "^4.21.0",
-    "multer": "^1.4.5-lts.1"
+    "multer": "^1.4.5-lts.1",
+    "@supabase/supabase-js": "^2.57.0",
+    "ws": "^8.18.0"
   },
   "keywords": [
     "sekai",
@@ -26,11 +27,10 @@
     "server",
     "streaming",
     "catalog",
-    "lyrics",
-    "supabase"
+    "lyrics"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/TU-USUARIO/sekai-music-server.git"
+    "url": "https://github.com/lunethosdev-eng/music-server.git"
   }
 }
