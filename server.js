@@ -236,7 +236,7 @@ function findCoverExt(title) {
   const base = slug(title);
 
   for (const extension of ['jpg', 'jpeg', 'png', 'webp']) {
-    const fullPath = path.join(COVERS_DIR, `\( {base}. \){extension}`);
+    const fullPath = path.join(COVERS_DIR, `${base}.${extension}`);
     if (fs.existsSync(fullPath)) {
       return extension;
     }
@@ -249,28 +249,28 @@ function findCoverExt(title) {
  * Genera URL local con API key
  */
 function localUrl(folder, filename) {
-  return `/\( {folder}/ \){encodeURIComponent(filename)}?api_key=${encodeURIComponent(API_KEY)}`;
+  return `/${folder}/${encodeURIComponent(filename)}?api_key=${encodeURIComponent(API_KEY)}`;
 }
 
 /**
  * Genera URL pública de Supabase Storage
  */
 function publicStorageUrl(folder, filename) {
-  return `\( {SUPABASE_URL}/storage/v1/object/public/ \){SUPABASE_BUCKET}/\( {folder}/ \){encodeURIComponent(filename)}`;
+  return `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${folder}/${encodeURIComponent(filename)}`;
 }
 
 /**
  * Genera un ID único para una canción
  */
 function generateTrackId() {
-  return `sekai-\( {Date.now()}- \){Math.random().toString(36).slice(2, 8)}`;
+  return `sekai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 /**
  * Genera un nombre de archivo seguro con timestamp
  */
 function generateFileName(originalName) {
-  return `\( {Date.now()}- \){cleanName(originalName)}`;
+  return `${Date.now()}-${cleanName(originalName)}`;
 }
 
 // ============================================================
@@ -300,11 +300,11 @@ function scanCatalog() {
     const previous = byFile[fileName] || {};
     const parsed = parseFilename(fileName);
 
-    const id = previous.id || `sekai-\( {Date.now()}- \){index}`;
+    const id = previous.id || `sekai-${Date.now()}-${index}`;
 
     const coverName =
       previous.coverFile ||
-      `\( {slug(previous.title || parsed.title)}. \){findCoverExt(previous.title || parsed.title) || 'jpg'}`;
+      `${slug(previous.title || parsed.title)}.${findCoverExt(previous.title || parsed.title) || 'jpg'}`;
 
     const coverExists =
       coverName && fs.existsSync(path.join(COVERS_DIR, coverName));
@@ -556,11 +556,11 @@ app.post(
       const album = String(req.body.album || '').trim();
       const year = String(req.body.year || '').trim();
 
-      // ===== LÍNEAS CRÍTICAS (NO TOCAR) =====
-      const id = `sekai-\( {Date.now()}- \){Math.random().toString(36).slice(2, 8)}`;
-      const songName = `\( {Date.now()}- \){cleanName(song.originalname)}`;
-      let coverName = cover ? `\( {Date.now()}- \){cleanName(cover.originalname)}` : null;
-      // =====================================
+      // ===== LÍNEAS CORREGIDAS =====
+      const id = generateTrackId();
+      const songName = generateFileName(song.originalname);
+      let coverName = cover ? generateFileName(cover.originalname) : null;
+      // =============================
 
       let coverBuffer = cover ? cover.buffer : null;
       let coverMime = cover ? cover.mimetype : null;
@@ -575,7 +575,7 @@ app.post(
           if (downloaded) {
             coverBuffer = downloaded;
             coverMime = 'image/jpeg';
-            coverName = `\( {Date.now()}- \){slug(title || artist)}.jpg`;
+            coverName = `${Date.now()}-${slug(title || artist)}.jpg`;
             console.log('Cover automática encontrada y descargada');
           }
         }
@@ -969,3 +969,4 @@ app.listen(PORT, () => {
 
   startKeepAlive();
 });
+
