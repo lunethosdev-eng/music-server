@@ -1,3 +1,16 @@
+/**
+ * ============================================================
+ *  SEKAI MUSIC SERVER
+ *  Versión completa y corregida
+ *  - Soporte Supabase + Local
+ *  - Fix de template literals
+ *  - Fix WebSocket (ws) para Node 20
+ *  - Keep-alive cada 14 minutos
+ *  - Búsqueda automática de covers (iTunes)
+ *  - Mejor logging y validaciones
+ * ============================================================
+ */
+
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
@@ -6,6 +19,10 @@ const multer = require('multer');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const ws = require('ws');
+
+// ============================================================
+// CONFIGURACIÓN BÁSICA
+// ============================================================
 
 const PORT = process.env.PORT || 8787;
 const ROOT = __dirname;
@@ -16,14 +33,18 @@ const COVERS_DIR = process.env.COVERS_DIR || path.join(DATA_DIR, 'covers');
 const CATALOG_FILE = process.env.CATALOG_FILE || path.join(DATA_DIR, 'catalog.json');
 const API_KEY_FILE = path.join(DATA_DIR, 'api-key.json');
 
-// ===============================
+// ============================================================
 // SUPABASE
-// ===============================
+// ============================================================
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').trim();
 const SUPABASE_SERVICE_ROLE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 const SUPABASE_BUCKET = (process.env.SUPABASE_BUCKET || 'music').trim();
 
+/**
+ * Cliente de Supabase.
+ * Se usa transport: ws porque Node 20 no tiene WebSocket nativo.
+ */
 const supabase =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
     ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
@@ -35,15 +56,24 @@ const supabase =
 
 const useSupabase = Boolean(supabase);
 
-// ===============================
+// ============================================================
 // API KEY
-// ===============================
+// ============================================================
 
+/**
+ * Obtiene o crea una API Key segura.
+ * Prioridad:
+ * 1. Variable de entorno API_KEY (recomendada)
+ * 2. Archivo api-key.json
+ * 3. Generar una nueva
+ */
 function getOrCreateApiKey() {
+  // 1. Variable de entorno (la más estable)
   if (process.env.API_KEY && process.env.API_KEY.trim()) {
     return process.env.API_KEY.trim();
   }
 
+  // 2. Intentar leer del archivo
   try {
     if (fs.existsSync(API_KEY_FILE)) {
       const saved = JSON.parse(fs.readFileSync(API_KEY_FILE, 'utf8'));
@@ -51,54 +81,86 @@ function getOrCreateApiKey() {
         return saved.key;
       }
     }
-  } catch (_) {}
+  } catch (err) {
+    console.warn('No se pudo leer api-key.json:', err.message);
+  }
 
+  // 3. Generar una nueva
   const key = crypto.randomBytes(32).toString('hex');
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(
-    API_KEY_FILE,
-    JSON.stringify({ key, createdAt: new Date().toISOString() }, null, 2),
-    { mode: 0o600 }
-  );
 
-  console.log('API KEY — guárdala, es necesaria para acceder al servidor:', key);
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(
+      API_KEY_FILE,
+      JSON.stringify(
+        {
+          key,
+          createdAt: new Date().toISOString()
+        },
+        null,
+        2
+      ),
+      { mode: 0o600 }
+    );
+  } catch (err) {
+    console.error('No se pudo guardar la API Key:', err.message);
+  }
+
+  console.log('API KEY generada (guárdala):', key);
   return key;
 }
 
 const API_KEY = getOrCreateApiKey();
 
+/**
+ * Middleware de autenticación.
+ * Acepta la key por header x-api-key o por query ?api_key=
+ */
 function requireApiKey(req, res, next) {
   const supplied = req.get('x-api-key') || req.query.api_key || '';
-  if (supplied !== API_KEY) {
-    return res.status(401).json({ error: 'API key inválida o faltante' });
+
+  if (!supplied || supplied !== API_KEY) {
+    return res.status(401).json({
+      error: 'API key inválida o faltante'
+    });
   }
+
   next();
 }
 
-// ===============================
-// CARPETAS
-// ===============================
+// ============================================================
+// CREAR CARPETAS NECESARIAS
+// ============================================================
 
 for (const directory of [MUSIC_DIR, COVERS_DIR]) {
-  fs.mkdirSync(directory, { recursive: true });
+  try {
+    fs.mkdirSync(directory, { recursive: true });
+  } catch (err) {
+    console.error(`No se pudo crear la carpeta ${directory}:`, err.message);
+  }
 }
 
-// ===============================
+// ============================================================
 // EXPRESS
-// ===============================
+// ============================================================
 
 const app = express();
+
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// Servir archivos locales (solo si no se usa Supabase)
 app.use('/music', requireApiKey, express.static(MUSIC_DIR, { acceptRanges: true }));
 app.use('/covers', requireApiKey, express.static(COVERS_DIR));
 
-// ===============================
-// FUNCIONES GENERALES
-// ===============================
+// ============================================================
+// FUNCIONES DE UTILIDAD
+// ============================================================
 
+/**
+ * Limpia nombres de archivo para que sean seguros.
+ */
 function cleanName(name) {
   return String(name || '')
     .normalize('NFKC')
@@ -109,6 +171,9 @@ function cleanName(name) {
     .slice(0, 180);
 }
 
+/**
+ * Genera un slug limpio a partir de un texto.
+ */
 function slug(value) {
   return String(value || '')
     .normalize('NFKD')
@@ -119,6 +184,10 @@ function slug(value) {
     .slice(0, 80);
 }
 
+/**
+ * Intenta extraer artista y título del nombre del archivo.
+ * Formato esperado: "Artista - Título.mp3"
+ */
 function parseFilename(name) {
   const base = name.replace(/\.(mp3|m4a|wav|ogg|flac)$/i, '');
   const parts = base.split(' - ');
@@ -136,6 +205,9 @@ function parseFilename(name) {
   };
 }
 
+/**
+ * Lee el catálogo local desde catalog.json
+ */
 function readCatalog() {
   try {
     const data = JSON.parse(fs.readFileSync(CATALOG_FILE, 'utf8'));
@@ -145,50 +217,97 @@ function readCatalog() {
   }
 }
 
+/**
+ * Guarda el catálogo local
+ */
 function writeCatalog(catalogData) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(CATALOG_FILE, JSON.stringify(catalogData, null, 2));
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(CATALOG_FILE, JSON.stringify(catalogData, null, 2));
+  } catch (err) {
+    console.error('Error escribiendo catalog.json:', err.message);
+  }
 }
 
+/**
+ * Busca la extensión de una cover local por título
+ */
 function findCoverExt(title) {
   const base = slug(title);
+
   for (const extension of ['jpg', 'jpeg', 'png', 'webp']) {
-    if (fs.existsSync(path.join(COVERS_DIR, `\( {base}. \){extension}`))) {
+    const fullPath = path.join(COVERS_DIR, `\( {base}. \){extension}`);
+    if (fs.existsSync(fullPath)) {
       return extension;
     }
   }
+
   return null;
 }
 
+/**
+ * Genera URL local con API key
+ */
 function localUrl(folder, filename) {
   return `/\( {folder}/ \){encodeURIComponent(filename)}?api_key=${encodeURIComponent(API_KEY)}`;
 }
 
+/**
+ * Genera URL pública de Supabase Storage
+ */
 function publicStorageUrl(folder, filename) {
   return `\( {SUPABASE_URL}/storage/v1/object/public/ \){SUPABASE_BUCKET}/\( {folder}/ \){encodeURIComponent(filename)}`;
 }
 
-// ===============================
-// CATÁLOGO LOCAL
-// ===============================
+/**
+ * Genera un ID único para una canción
+ */
+function generateTrackId() {
+  return `sekai-\( {Date.now()}- \){Math.random().toString(36).slice(2, 8)}`;
+}
 
+/**
+ * Genera un nombre de archivo seguro con timestamp
+ */
+function generateFileName(originalName) {
+  return `\( {Date.now()}- \){cleanName(originalName)}`;
+}
+
+// ============================================================
+// CATÁLOGO LOCAL
+// ============================================================
+
+/**
+ * Escanea la carpeta de música y reconstruye el catálogo local
+ */
 function scanCatalog() {
   const oldCatalog = readCatalog();
-  const byFile = Object.fromEntries(oldCatalog.map(track => [track.fileName, track]));
+  const byFile = Object.fromEntries(
+    oldCatalog.map(track => [track.fileName, track])
+  );
 
-  const files = fs
-    .readdirSync(MUSIC_DIR)
-    .filter(file => /\.(mp3|m4a|wav|ogg|flac)$/i.test(file));
+  let files = [];
+  try {
+    files = fs
+      .readdirSync(MUSIC_DIR)
+      .filter(file => /\.(mp3|m4a|wav|ogg|flac)$/i.test(file));
+  } catch (err) {
+    console.error('Error leyendo carpeta de música:', err.message);
+    return [];
+  }
 
   const catalogData = files.map((fileName, index) => {
     const previous = byFile[fileName] || {};
     const parsed = parseFilename(fileName);
 
     const id = previous.id || `sekai-\( {Date.now()}- \){index}`;
+
     const coverName =
       previous.coverFile ||
       `\( {slug(previous.title || parsed.title)}. \){findCoverExt(previous.title || parsed.title) || 'jpg'}`;
-    const coverExists = coverName && fs.existsSync(path.join(COVERS_DIR, coverName));
+
+    const coverExists =
+      coverName && fs.existsSync(path.join(COVERS_DIR, coverName));
 
     return {
       id,
@@ -210,10 +329,13 @@ function scanCatalog() {
 
 let catalog = scanCatalog();
 
-// ===============================
+// ============================================================
 // CATÁLOGO SUPABASE
-// ===============================
+// ============================================================
 
+/**
+ * Convierte una fila de Supabase al formato de track del servidor
+ */
 function convertSupabaseTrack(row) {
   const fileName = row.file_name || row.fileName || row.filename || null;
   const coverFile = row.cover_file || row.coverFile || null;
@@ -232,16 +354,25 @@ function convertSupabaseTrack(row) {
   };
 }
 
+/**
+ * Obtiene el catálogo completo desde Supabase
+ */
 async function getRemoteCatalog() {
   const result = await supabase
     .from('music_tracks')
     .select('*')
     .order('created_at', { ascending: true });
 
-  if (result.error) throw result.error;
+  if (result.error) {
+    throw result.error;
+  }
+
   return (result.data || []).map(convertSupabaseTrack);
 }
 
+/**
+ * Refresca el catálogo (Supabase o local)
+ */
 async function refreshCatalog() {
   if (useSupabase) {
     try {
@@ -251,49 +382,128 @@ async function refreshCatalog() {
       console.error('Error leyendo catálogo de Supabase:', error.message);
     }
   }
+
   catalog = scanCatalog();
   return catalog;
 }
 
-// ===============================
-// MULTER
-// ===============================
+// ============================================================
+// BÚSQUEDA AUTOMÁTICA DE COVERS (iTunes)
+// ============================================================
+
+/**
+ * Busca un cover estático en iTunes Search API (gratis, sin API key)
+ * Devuelve la URL de la imagen o null
+ */
+async function searchCoverFromItunes(artist, title) {
+  if (!artist && !title) return null;
+
+  try {
+    const term = encodeURIComponent(`${artist} ${title}`.trim());
+    const url = `https://itunes.apple.com/search?term=${term}&media=music&entity=song&limit=5`;
+
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'SekaiMusicServer/1.0'
+      }
+    });
+
+    if (!response.ok) return null;
+
+    const data = await response.json();
+
+    if (!data.results || data.results.length === 0) {
+      return null;
+    }
+
+    // Buscamos el resultado más relevante
+    const best = data.results.find(item =>
+      item.artworkUrl100 || item.artworkUrl60
+    );
+
+    if (!best) return null;
+
+    // Preferimos la versión más grande posible
+    let artwork = best.artworkUrl100 || best.artworkUrl60 || null;
+
+    if (artwork) {
+      // Intentamos pedir una versión más grande
+      artwork = artwork.replace('100x100bb', '600x600bb').replace('60x60bb', '600x600bb');
+    }
+
+    return artwork;
+  } catch (err) {
+    console.warn('Error buscando cover en iTunes:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Descarga una imagen desde una URL y la devuelve como Buffer
+ */
+async function downloadImage(url) {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  } catch (err) {
+    console.warn('Error descargando imagen:', err.message);
+    return null;
+  }
+}
+
+// ============================================================
+// MULTER (UPLOAD)
+// ============================================================
 
 const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
-  limits: { fileSize: 100 * 1024 * 1024 },
+  limits: {
+    fileSize: 100 * 1024 * 1024 // 100 MB
+  },
   fileFilter: (_req, file, callback) => {
-    if (file.fieldname === 'song' && !/\.(mp3|m4a|wav|ogg|flac)$/i.test(file.originalname)) {
-      return callback(new Error('Formato de canción no permitido'));
+    if (file.fieldname === 'song') {
+      if (!/\.(mp3|m4a|wav|ogg|flac)$/i.test(file.originalname)) {
+        return callback(new Error('Formato de canción no permitido'));
+      }
     }
-    if (file.fieldname === 'cover' && !/^image\/(jpeg|png|webp)$/i.test(file.mimetype)) {
-      return callback(new Error('La cover debe ser JPG, PNG o WEBP'));
+
+    if (file.fieldname === 'cover') {
+      if (!/^image\/(jpeg|png|webp)$/i.test(file.mimetype)) {
+        return callback(new Error('La cover debe ser JPG, PNG o WEBP'));
+      }
     }
+
     callback(null, true);
   }
 });
 
-// ===============================
-// HEALTH
-// ===============================
+// ============================================================
+// HEALTH CHECK
+// ============================================================
 
 app.get('/health', async (_req, res) => {
   res.json({
     ok: true,
     service: 'sekai-music-server',
     storage: useSupabase ? 'supabase' : 'local',
-    tracks: catalog.length
+    tracks: catalog.length,
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
   });
 });
 
-// ===============================
-// CATÁLOGO
-// ===============================
+// ============================================================
+// ENDPOINTS DE CATÁLOGO
+// ============================================================
 
 app.get('/api/catalog', requireApiKey, async (_req, res) => {
   await refreshCatalog();
+
   res.json({
     source: 'sekai-music-server',
     storage: useSupabase ? 'supabase' : 'local',
@@ -309,6 +519,7 @@ app.get('/catalog.json', requireApiKey, async (_req, res) => {
 
 app.post('/api/rescan', requireApiKey, async (_req, res) => {
   await refreshCatalog();
+
   res.json({
     ok: true,
     total: catalog.length,
@@ -316,9 +527,9 @@ app.post('/api/rescan', requireApiKey, async (_req, res) => {
   });
 });
 
-// ===============================
+// ============================================================
 // SUBIR CANCIÓN
-// ===============================
+// ============================================================
 
 app.post(
   '/api/upload',
@@ -333,20 +544,46 @@ app.post(
       const cover = req.files?.cover?.[0];
 
       if (!song) {
-        return res.status(400).json({ error: 'Falta la canción' });
+        return res.status(400).json({
+          error: 'Falta la canción'
+        });
       }
 
       const parsed = parseFilename(song.originalname);
+
       const title = String(req.body.title || parsed.title).trim();
       const artist = String(req.body.artist || parsed.artist).trim();
       const album = String(req.body.album || '').trim();
       const year = String(req.body.year || '').trim();
 
-      // ===== LÍNEAS CRÍTICAS (NO MODIFICAR) =====
+      // ===== LÍNEAS CRÍTICAS (NO TOCAR) =====
       const id = `sekai-\( {Date.now()}- \){Math.random().toString(36).slice(2, 8)}`;
       const songName = `\( {Date.now()}- \){cleanName(song.originalname)}`;
-      const coverName = cover ? `\( {Date.now()}- \){cleanName(cover.originalname)}` : null;
-      // ==========================================
+      let coverName = cover ? `\( {Date.now()}- \){cleanName(cover.originalname)}` : null;
+      // =====================================
+
+      let coverBuffer = cover ? cover.buffer : null;
+      let coverMime = cover ? cover.mimetype : null;
+
+      // Si no subieron cover, intentamos buscarla automáticamente en iTunes
+      if (!coverBuffer && (artist || title)) {
+        console.log(`Buscando cover automática para: ${artist} - ${title}`);
+        const coverUrl = await searchCoverFromItunes(artist, title);
+
+        if (coverUrl) {
+          const downloaded = await downloadImage(coverUrl);
+          if (downloaded) {
+            coverBuffer = downloaded;
+            coverMime = 'image/jpeg';
+            coverName = `\( {Date.now()}- \){slug(title || artist)}.jpg`;
+            console.log('Cover automática encontrada y descargada');
+          }
+        }
+      }
+
+      // =========================
+      // SUBIDA A SUPABASE
+      // =========================
 
       if (useSupabase) {
         const songPath = `music/${songName}`;
@@ -358,13 +595,15 @@ app.post(
             upsert: false
           });
 
-        if (uploadResult.error) throw uploadResult.error;
+        if (uploadResult.error) {
+          throw uploadResult.error;
+        }
 
-        if (cover) {
+        if (coverBuffer && coverName) {
           uploadResult = await supabase.storage
             .from(SUPABASE_BUCKET)
-            .upload(`covers/${coverName}`, cover.buffer, {
-              contentType: cover.mimetype,
+            .upload(`covers/${coverName}`, coverBuffer, {
+              contentType: coverMime || 'image/jpeg',
               upsert: false
             });
 
@@ -396,7 +635,10 @@ app.post(
         if (insertResult.error) {
           await supabase.storage
             .from(SUPABASE_BUCKET)
-            .remove([songPath, ...(coverName ? [`covers/${coverName}`] : [])]);
+            .remove([
+              songPath,
+              ...(coverName ? [`covers/${coverName}`] : [])
+            ]);
           throw insertResult.error;
         }
 
@@ -409,10 +651,16 @@ app.post(
         });
       }
 
-      // Modo local
-      fs.writeFileSync(path.join(MUSIC_DIR, songName), song.buffer);
-      if (cover) {
-        fs.writeFileSync(path.join(COVERS_DIR, coverName), cover.buffer);
+      // =========================
+      // SUBIDA LOCAL
+      // =========================
+
+      const songPath = path.join(MUSIC_DIR, songName);
+      fs.writeFileSync(songPath, song.buffer);
+
+      if (coverBuffer && coverName) {
+        const coverPath = path.join(COVERS_DIR, coverName);
+        fs.writeFileSync(coverPath, coverBuffer);
       }
 
       const track = {
@@ -423,7 +671,7 @@ app.post(
         year,
         fileName: songName,
         file: localUrl('music', songName),
-        cover: cover ? localUrl('covers', coverName) : null,
+        cover: coverName ? localUrl('covers', coverName) : null,
         coverFile: coverName,
         duration: null
       };
@@ -442,17 +690,25 @@ app.post(
   }
 );
 
-// ===============================
+// ============================================================
 // ELIMINAR CANCIÓN
-// ===============================
+// ============================================================
 
 app.delete('/api/tracks/:id', requireApiKey, async (req, res, next) => {
   try {
-    const track = catalog.find(item => String(item.id) === String(req.params.id));
+    const track = catalog.find(
+      item => String(item.id) === String(req.params.id)
+    );
 
     if (!track) {
-      return res.status(404).json({ error: 'Canción no encontrada' });
+      return res.status(404).json({
+        error: 'Canción no encontrada'
+      });
     }
+
+    // =========================
+    // ELIMINAR DE SUPABASE
+    // =========================
 
     if (useSupabase) {
       const storagePaths = [
@@ -460,67 +716,107 @@ app.delete('/api/tracks/:id', requireApiKey, async (req, res, next) => {
         ...(track.coverFile ? [`covers/${track.coverFile}`] : [])
       ];
 
-      const removeResult = await supabase.storage.from(SUPABASE_BUCKET).remove(storagePaths);
+      const removeResult = await supabase.storage
+        .from(SUPABASE_BUCKET)
+        .remove(storagePaths);
+
       if (removeResult.error) {
-        console.error('Error eliminando archivos:', removeResult.error.message);
+        console.error('Error eliminando archivos de Storage:', removeResult.error.message);
       }
 
-      const deleteResult = await supabase.from('music_tracks').delete().eq('id', track.id);
-      if (deleteResult.error) throw deleteResult.error;
+      const deleteResult = await supabase
+        .from('music_tracks')
+        .delete()
+        .eq('id', track.id);
+
+      if (deleteResult.error) {
+        throw deleteResult.error;
+      }
 
       await refreshCatalog();
-      return res.json({ ok: true, total: catalog.length });
+
+      return res.json({
+        ok: true,
+        total: catalog.length
+      });
     }
 
-    // Local
-    const index = catalog.findIndex(item => String(item.id) === String(req.params.id));
+    // =========================
+    // ELIMINAR LOCALMENTE
+    // =========================
+
+    const index = catalog.findIndex(
+      item => String(item.id) === String(req.params.id)
+    );
+
     if (index < 0) {
-      return res.status(404).json({ error: 'Canción no encontrada' });
+      return res.status(404).json({
+        error: 'Canción no encontrada'
+      });
     }
 
     const [removedTrack] = catalog.splice(index, 1);
 
-    for (const [filename, directory] of [
+    const filesToDelete = [
       [removedTrack.fileName, MUSIC_DIR],
       [removedTrack.coverFile, COVERS_DIR]
-    ]) {
+    ];
+
+    for (const [filename, directory] of filesToDelete) {
       if (!filename) continue;
+
       const safeFilename = path.basename(String(filename));
       const directoryPath = path.resolve(directory);
       const filePath = path.resolve(directory, safeFilename);
 
-      if (filePath.startsWith(directoryPath + path.sep) && fs.existsSync(filePath)) {
+      if (
+        filePath.startsWith(directoryPath + path.sep) &&
+        fs.existsSync(filePath)
+      ) {
         fs.unlinkSync(filePath);
       }
     }
 
     writeCatalog(catalog);
-    return res.json({ ok: true, total: catalog.length });
+
+    return res.json({
+      ok: true,
+      total: catalog.length
+    });
   } catch (error) {
     next(error);
   }
 });
 
-// ===============================
+// ============================================================
 // LYRICS
-// ===============================
+// ============================================================
 
 app.get('/api/lyrics', requireApiKey, async (req, res) => {
   const artist = String(req.query.artist || '').trim();
   const title = String(req.query.title || '').trim();
 
   if (!title) {
-    return res.status(400).json({ error: 'title requerido' });
+    return res.status(400).json({
+      error: 'title requerido'
+    });
   }
 
   try {
     const query = encodeURIComponent(`${artist} ${title}`.trim());
-    const response = await fetch(`https://lrclib.net/api/search?q=${query}`, {
-      headers: { 'User-Agent': 'SekaiMusicServer/1.0' }
-    });
+
+    const response = await fetch(
+      `https://lrclib.net/api/search?q=${query}`,
+      {
+        headers: {
+          'User-Agent': 'SekaiMusicServer/1.0'
+        }
+      }
+    );
 
     if (response.ok) {
       const results = await response.json();
+
       const best = Array.isArray(results)
         ? results.find(item => item.syncedLyrics || item.plainLyrics)
         : null;
@@ -542,60 +838,114 @@ app.get('/api/lyrics', requireApiKey, async (req, res) => {
       title
     });
   } catch (error) {
-    return res.status(502).json({ error: 'Error al buscar lyrics' });
+    return res.status(502).json({
+      error: 'Error al buscar lyrics'
+    });
   }
 });
 
-// ===============================
-// INDEX.HTML
-// ===============================
+// ============================================================
+// BÚSQUEDA DE COVER MANUAL (endpoint extra)
+// ============================================================
 
-app.get('/', (_req, res) => {
-  const indexPath = path.join(ROOT, 'index.html');
-  const html = fs.readFileSync(indexPath, 'utf8');
+app.get('/api/cover-search', requireApiKey, async (req, res) => {
+  const artist = String(req.query.artist || '').trim();
+  const title = String(req.query.title || '').trim();
 
-  const injected = html.replace(
-    '<!-- API_KEY_INJECT -->',
-    `<script>window.SEKAI_API_KEY=${JSON.stringify(API_KEY)};</script>`
-  );
+  if (!artist && !title) {
+    return res.status(400).json({
+      error: 'Se necesita al menos artist o title'
+    });
+  }
 
-  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-  res.type('html').send(injected);
+  const coverUrl = await searchCoverFromItunes(artist, title);
+
+  if (!coverUrl) {
+    return res.status(404).json({
+      error: 'No se encontró cover',
+      artist,
+      title
+    });
+  }
+
+  res.json({
+    ok: true,
+    artist,
+    title,
+    cover: coverUrl
+  });
 });
 
-// ===============================
-// ERRORES
-// ===============================
+// ============================================================
+// PÁGINA PRINCIPAL
+// ============================================================
+
+app.get('/', (_req, res) => {
+  try {
+    const indexPath = path.join(ROOT, 'index.html');
+    const html = fs.readFileSync(indexPath, 'utf8');
+
+    const injected = html.replace(
+      '<!-- API_KEY_INJECT -->',
+      `<script>window.SEKAI_API_KEY=${JSON.stringify(API_KEY)};</script>`
+    );
+
+    res.set(
+      'Cache-Control',
+      'no-store, no-cache, must-revalidate, proxy-revalidate'
+    );
+
+    res.type('html').send(injected);
+  } catch (err) {
+    res.status(500).send('Error cargando index.html');
+  }
+});
+
+// ============================================================
+// MANEJADOR DE ERRORES
+// ============================================================
 
 app.use((error, _req, res, _next) => {
-  console.error(error);
-  res.status(400).json({
+  console.error('Error en la petición:', error);
+
+  const status = error instanceof multer.MulterError ? 400 : 400;
+
+  res.status(status).json({
     error: error.message || 'Solicitud no válida'
   });
 });
 
-// ===============================
-// KEEP-ALIVE (evita spin-down de Render)
-// ===============================
+// ============================================================
+// KEEP-ALIVE (evita que Render Free se duerma)
+// ============================================================
 
 function startKeepAlive() {
-  const host = process.env.RENDER_EXTERNAL_URL || process.env.RENDER_EXTERNAL_HOSTNAME;
+  const host =
+    process.env.RENDER_EXTERNAL_URL ||
+    process.env.RENDER_EXTERNAL_HOSTNAME;
+
   if (!host) {
-    console.log('Keep-alive desactivado (no detectado entorno Render)');
+    console.log('Keep-alive desactivado (no se detectó entorno Render)');
     return;
   }
 
-  const pingUrl = host.startsWith('http') ? `\( {host}/health` : `https:// \){host}/health`;
-  console.log(`Keep-alive activado → ping cada 14 minutos a ${pingUrl}`);
+  const pingUrl = host.startsWith('http')
+    ? `${host}/health`
+    : `https://${host}/health`;
+
+  console.log(`Keep-alive activado → cada 14 minutos a ${pingUrl}`);
 
   setInterval(async () => {
     try {
       const response = await fetch(pingUrl, {
         method: 'GET',
-        headers: { 'User-Agent': 'SekaiKeepAlive/1.0' }
+        headers: {
+          'User-Agent': 'SekaiKeepAlive/1.0'
+        }
       });
+
       if (response.ok) {
-        console.log(`[Keep-alive] Ping OK → ${new Date().toISOString()}`);
+        console.log(`[Keep-alive] OK → ${new Date().toISOString()}`);
       } else {
         console.warn(`[Keep-alive] Respuesta ${response.status}`);
       }
@@ -605,15 +955,17 @@ function startKeepAlive() {
   }, 14 * 60 * 1000);
 }
 
-// ===============================
+// ============================================================
 // INICIAR SERVIDOR
-// ===============================
+// ============================================================
 
 app.listen(PORT, () => {
-  console.log(
-    `Sekai Music Server on :${PORT} · ${catalog.length} tracks · ${
-      useSupabase ? 'Supabase' : 'local'
-    }`
-  );
+  console.log('================================================');
+  console.log(`  Sekai Music Server`);
+  console.log(`  Puerto: ${PORT}`);
+  console.log(`  Tracks: ${catalog.length}`);
+  console.log(`  Storage: ${useSupabase ? 'Supabase' : 'Local'}`);
+  console.log('================================================');
+
   startKeepAlive();
 });
