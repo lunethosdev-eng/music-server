@@ -5,8 +5,6 @@
  *  - Soporte Supabase + Local
  *  - Descarga bajo demanda en tiempo real desde Apps (/api/search)
  *  - Auto-descarga de Artistas Famosos (2023-2026) y Tendencias
- *  - Búsqueda en cascada: SoundCloud -> Proxies Invidious (YouTube)
- *  - Filtro para evitar descargas <= 60s o contenido engañoso
  *  - Limpieza automática de duplicados y audios cortos
  *  - Reporte acumulativo por Correo cada 10 minutos
  *  - Notificación automática por Email al finalizar la cola
@@ -416,7 +414,7 @@ async function cleanCatalogDuplicatesAndShorts() {
                         track.fileName.toLowerCase().includes('harvey') || 
                         track.fileName.toLowerCase().includes('her');
 
-    // 1. Eliminar canciones cortas <= 60s (si no están protegidas)
+    // 1. Eliminar canciones cortas <= 60s (si no están protegidas y tienen la duración registrada)
     if (track.duration && Number(track.duration) <= 60 && !isProtected) {
       console.log(`[Cleaner] Canción corta identificada (<= 60s): "${track.artist} - ${track.title}" (${track.duration}s)`);
       toDelete.push(track);
@@ -530,6 +528,7 @@ async function processQueue() {
   }
 }
 
+// LÓGICA DE DESCARGA RESTAURADA Y COMPATIBLE
 async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, isManual = false }) {
   const tempFilename = `scrape-${Date.now()}`;
   const tempFilePath = path.join(DATA_DIR, `${tempFilename}.mp3`);
@@ -538,17 +537,16 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
   const artist = reqArtist || '';
   const cleanQuery = `${artist} ${title}`.trim() || searchQuery;
 
-  // Fuetes en cascada: SoundCloud primero, luego Proxies Invidious / YouTube
+  // Fuetes en orden de confiabilidad
   const sources = [
-    { name: 'SoundCloud', value: `scsearch1:${cleanQuery}` },
-    { name: 'Invidious Proxy 1', value: `https://inv.tux.pizza/search?q=${encodeURIComponent(cleanQuery)}` },
-    { name: 'Invidious Proxy 2', value: `https://invidious.nerdvpn.de/search?q=${encodeURIComponent(cleanQuery)}` }
+    `scsearch1:${cleanQuery}`,
+    `ytsearch1:${cleanQuery}`
   ];
 
   let downloadSuccess = false;
 
   for (const source of sources) {
-    console.log(`[Scrape] Probando fuente ${source.name}: "${cleanQuery}"`);
+    console.log(`[Scrape] Probando fuente: "${source}"`);
 
     const dlpOptions = {
       extractAudio: true,
@@ -557,26 +555,26 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
       output: tempFilePath,
       noCheckCertificates: true,
       noWarnings: true,
-      matchFilter: isManual ? null : 'duration >= 60',
-      rejectTitle: 'remix|speed up|sped up|slowed|reverb|nightcore|cover|edit|lofi|instrumental'
+      concurrentFragments: 1,
+      limitRate: '1M'
     };
 
     try {
-      await ytDlp(source.value, dlpOptions);
+      await ytDlp(source, dlpOptions);
 
-      if (fs.existsSync(tempFilePath) && fs.statSync(tempFilePath).size > 200000) {
+      if (fs.existsSync(tempFilePath) && fs.statSync(tempFilePath).size > 100000) {
         downloadSuccess = true;
-        console.log(`[Scrape] Descarga completada correctamente desde ${source.name}`);
+        console.log(`[Scrape] Descarga completada correctamente.`);
         break;
       }
     } catch (err) {
-      console.warn(`[Scrape] Fallo al intentar descargar con ${source.name}. Probando siguiente opción...`);
+      console.warn(`[Scrape] Fallo en la fuente "${source}". Intentando alternativa...`);
       if (fs.existsSync(tempFilePath)) try { fs.unlinkSync(tempFilePath); } catch (_) {}
     }
   }
 
   if (!downloadSuccess || !fs.existsSync(tempFilePath)) {
-    throw new Error('No se pudo encontrar una versión original completa en SoundCloud ni YouTube.');
+    throw new Error('No se pudo descargar el audio desde las fuentes disponibles.');
   }
 
   try {
@@ -910,3 +908,4 @@ app.listen(PORT, async () => {
   // Ejecutar scraper automático al iniciar
   autoScrapeTrendsAndArtists();
 });
+
