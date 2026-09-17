@@ -5,7 +5,6 @@
  *  - Soporte Supabase + Local
  *  - Descarga bajo demanda en tiempo real desde Apps (/api/search)
  *  - Auto-descarga de Artistas Famosos (2023-2026) y Tendencias
- *  - Limpieza automática de duplicados y audios cortos
  *  - Reporte acumulativo por Correo cada 10 minutos
  *  - Notificación automática por Email al finalizar la cola
  * ============================================================
@@ -325,8 +324,7 @@ function scanCatalog() {
       file: localUrl('music', fileName),
       cover: coverExists ? localUrl('covers', coverName) : previous.cover || null,
       coverFile: coverExists ? coverName : previous.coverFile || null,
-      duration: previous.duration || null,
-      isManual: previous.isManual || fileName.toLowerCase().includes('harvey') || fileName.toLowerCase().includes('her')
+      duration: previous.duration || null
     };
   });
 
@@ -337,7 +335,7 @@ function scanCatalog() {
 let catalog = scanCatalog();
 
 function convertSupabaseTrack(row) {
-  const fileName = row.file_name || row.fileName || row.filename || '';
+  const fileName = row.file_name || row.fileName || row.filename || null;
   const coverFile = row.cover_file || row.coverFile || null;
 
   return {
@@ -350,8 +348,7 @@ function convertSupabaseTrack(row) {
     file: row.file_url || (fileName ? publicStorageUrl('music', fileName) : null),
     cover: row.cover_url || (coverFile ? publicStorageUrl('covers', coverFile) : null),
     coverFile,
-    duration: row.duration || null,
-    isManual: Boolean(row.is_manual || row.isManual || fileName.toLowerCase().includes('harvey') || fileName.toLowerCase().includes('her'))
+    duration: row.duration || null
   };
 }
 
@@ -372,78 +369,6 @@ async function refreshCatalog() {
   }
   catalog = scanCatalog();
   return catalog;
-}
-
-// ============================================================
-// MÓDULO DE ELIMINACIÓN Y LIMPIEZA AUTOMÁTICA
-// ============================================================
-
-async function deleteTrackFromSystem(track) {
-  try {
-    if (useSupabase) {
-      const filesToRemove = [`music/${track.fileName}`];
-      if (track.coverFile) filesToRemove.push(`covers/${track.coverFile}`);
-      await supabase.storage.from(SUPABASE_BUCKET).remove(filesToRemove);
-      await supabase.from('music_tracks').delete().eq('id', track.id);
-    } else {
-      const filePath = path.join(MUSIC_DIR, track.fileName);
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      if (track.coverFile) {
-        const coverPath = path.join(COVERS_DIR, track.coverFile);
-        if (fs.existsSync(coverPath)) fs.unlinkSync(coverPath);
-      }
-    }
-    console.log(`[Cleaner] Eliminado: "${track.artist} - ${track.title}" (${track.fileName})`);
-  } catch (err) {
-    console.error(`[Cleaner] Error eliminando ${track.fileName}:`, err.message);
-  }
-}
-
-async function cleanCatalogDuplicatesAndShorts() {
-  console.log('[Cleaner] Escaneando catálogo en busca de duplicados y audios cortos...');
-  await refreshCatalog();
-
-  const seenKeys = new Set();
-  const toDelete = [];
-
-  for (const track of catalog) {
-    const uniqueKey = `${track.artist.toLowerCase().trim()}_${track.title.toLowerCase().trim()}`;
-
-    // Proteger subidas manuales y archivos clave
-    const isProtected = track.isManual || 
-                        track.fileName.toLowerCase().includes('harvey') || 
-                        track.fileName.toLowerCase().includes('her');
-
-    // 1. Eliminar canciones cortas <= 60s (si no están protegidas y tienen la duración registrada)
-    if (track.duration && Number(track.duration) <= 60 && !isProtected) {
-      console.log(`[Cleaner] Canción corta identificada (<= 60s): "${track.artist} - ${track.title}" (${track.duration}s)`);
-      toDelete.push(track);
-      continue;
-    }
-
-    // 2. Eliminar duplicados manteniendo la primera instancia
-    if (seenKeys.has(uniqueKey)) {
-      if (isProtected) {
-        console.log(`[Cleaner] Omitida protección sobre archivo clave: "${track.artist} - ${track.title}"`);
-      } else {
-        console.log(`[Cleaner] Canción duplicada identificada: "${track.artist} - ${track.title}"`);
-        toDelete.push(track);
-      }
-    } else {
-      seenKeys.add(uniqueKey);
-    }
-  }
-
-  if (toDelete.length > 0) {
-    console.log(`[Cleaner] Procesando eliminación de ${toDelete.length} canciones...`);
-    for (const track of toDelete) {
-      await deleteTrackFromSystem(track);
-    }
-    await refreshCatalog();
-    console.log(`[Cleaner] Limpieza finalizada. Canciones activas en catálogo: ${catalog.length}`);
-  } else {
-    console.log('[Cleaner] Catálogo limpio. No se requirió eliminar registros.');
-  }
 }
 
 // ============================================================
@@ -495,8 +420,8 @@ function checkQueueCompletion() {
     completionTimer = setTimeout(async () => {
       if (downloadQueue.length === 0 && !isDownloading && activeProcess) {
         activeProcess = false;
-        console.log('[Queue] Proceso concluido. Ejecutando mantenimiento final...');
-        await cleanCatalogDuplicatesAndShorts();
+        console.log('[Queue] Proceso concluido. Enviando correo final...');
+        await refreshCatalog();
         await sendIntervalReportEmail(); // Enviar remanente de descargas
         await sendCompletionEmail(catalog.length);
       }
@@ -528,30 +453,14 @@ async function processQueue() {
   }
 }
 
-// LÓGICA DE DESCARGA RESTAURADA Y COMPATIBLE
-async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, isManual = false }) {
+async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year }) {
   const tempFilename = `scrape-${Date.now()}`;
   const tempFilePath = path.join(DATA_DIR, `${tempFilename}.mp3`);
 
-  const title = reqTitle || '';
-  const artist = reqArtist || '';
-  const cleanQuery = `${artist} ${title}`.trim() || searchQuery;
-
-  // Fuetes en orden de confiabilidad
-  const sources = [
-    `scsearch1:${cleanQuery}`,
-    `ytsearch1:${cleanQuery}`
-  ];
-
-  let downloadSuccess = false;
-
-  for (const source of sources) {
-    console.log(`[Scrape] Probando fuente: "${source}"`);
-
+  try {
     const dlpOptions = {
       extractAudio: true,
       audioFormat: 'mp3',
-      audioQuality: '0',
       output: tempFilePath,
       noCheckCertificates: true,
       noWarnings: true,
@@ -559,48 +468,35 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
       limitRate: '1M'
     };
 
-    try {
-      await ytDlp(source, dlpOptions);
+    await ytDlp(`scsearch1:${searchQuery}`, dlpOptions);
 
-      if (fs.existsSync(tempFilePath) && fs.statSync(tempFilePath).size > 100000) {
-        downloadSuccess = true;
-        console.log(`[Scrape] Descarga completada correctamente.`);
-        break;
-      }
-    } catch (err) {
-      console.warn(`[Scrape] Fallo en la fuente "${source}". Intentando alternativa...`);
-      if (fs.existsSync(tempFilePath)) try { fs.unlinkSync(tempFilePath); } catch (_) {}
+    if (!fs.existsSync(tempFilePath)) {
+      throw new Error('No se generó el archivo de audio');
     }
-  }
 
-  if (!downloadSuccess || !fs.existsSync(tempFilePath)) {
-    throw new Error('No se pudo descargar el audio desde las fuentes disponibles.');
-  }
-
-  try {
     const songBuffer = fs.readFileSync(tempFilePath);
     try { fs.unlinkSync(tempFilePath); } catch (_) {}
 
     const parsed = parseFilename(searchQuery);
-    const finalTitle = reqTitle || parsed.title;
-    const finalArtist = reqArtist || parsed.artist;
+    const title = reqTitle || parsed.title;
+    const artist = reqArtist || parsed.artist;
     const id = generateTrackId();
-    const songName = `${Date.now()}-${slug(finalTitle)}.mp3`;
+    const songName = `${Date.now()}-${slug(title)}.mp3`;
 
     let coverBuffer = null;
     let coverName = null;
-    const coverUrl = await searchCoverFromItunes(finalArtist, finalTitle);
+    const coverUrl = await searchCoverFromItunes(artist, title);
 
     if (coverUrl) {
       const downloaded = await downloadImage(coverUrl);
       if (downloaded) {
         coverBuffer = downloaded;
-        coverName = `${Date.now()}-${slug(finalTitle || finalArtist)}.jpg`;
+        coverName = `${Date.now()}-${slug(title || artist)}.jpg`;
       }
     }
 
     // Registrar descarga para el reporte de 10 min
-    downloadedInLastInterval.push({ artist: finalArtist, title: finalTitle });
+    downloadedInLastInterval.push({ artist, title });
 
     if (useSupabase) {
       const songPath = `music/${songName}`;
@@ -616,9 +512,8 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
       }
 
       const row = {
-        id, title: finalTitle, artist: finalArtist, album, year,
+        id, title, artist, album, year,
         file_name: songName, cover_file: coverName, duration: null,
-        is_manual: isManual,
         file_url: publicStorageUrl('music', songName),
         cover_url: coverName ? publicStorageUrl('covers', coverName) : null
       };
@@ -633,7 +528,7 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
     fs.writeFileSync(path.join(MUSIC_DIR, songName), songBuffer);
     if (coverBuffer && coverName) fs.writeFileSync(path.join(COVERS_DIR, coverName), coverBuffer);
 
-    const track = { id, title: finalTitle, artist: finalArtist, album, year, fileName: songName, file: localUrl('music', songName), cover: coverName ? localUrl('covers', coverName) : null, coverFile: coverName, duration: null, isManual };
+    const track = { id, title, artist, album, year, fileName: songName, file: localUrl('music', songName), cover: coverName ? localUrl('covers', coverName) : null, coverFile: coverName, duration: null };
     catalog.push(track);
     writeCatalog(catalog);
 
@@ -650,8 +545,8 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
 
 function addToQueueIfMissing(artist, title) {
   const exists = catalog.some(c => 
-    c.title.toLowerCase().trim() === title.toLowerCase().trim() && 
-    c.artist.toLowerCase().trim() === artist.toLowerCase().trim()
+    c.title.toLowerCase().includes(title.toLowerCase()) && 
+    c.artist.toLowerCase().includes(artist.toLowerCase())
   );
 
   if (!exists) {
@@ -660,8 +555,7 @@ function addToQueueIfMissing(artist, title) {
       reqArtist: artist,
       reqTitle: title,
       album: '',
-      year: '',
-      isManual: false
+      year: ''
     });
   }
 }
@@ -752,7 +646,7 @@ app.get('/api/search', requireApiKey, async (req, res) => {
 
   console.log(`[App Search] Petición externa recibida: "${q}". Añadiendo al frente de la cola...`);
 
-  const task = { searchQuery: q, reqArtist: '', reqTitle: q, album: '', year: '', isManual: false };
+  const task = { searchQuery: q, reqArtist: '', reqTitle: q, album: '', year: '' };
   const downloadPromise = new Promise((resolve, reject) => {
     task.resolve = resolve;
     task.reject = reject;
@@ -774,66 +668,6 @@ app.get('/api/catalog', requireApiKey, async (_req, res) => {
   res.json({ source: 'sekai-music-server', storage: useSupabase ? 'supabase' : 'local', total: catalog.length, data: catalog });
 });
 
-app.post('/api/upload', requireApiKey, upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No se recibió ningún archivo de audio' });
-
-  const title = String(req.body.title || '').trim() || parseFilename(req.file.originalname).title;
-  const artist = String(req.body.artist || '').trim() || parseFilename(req.file.originalname).artist;
-  const album = String(req.body.album || '').trim();
-  const year = String(req.body.year || '').trim();
-  const songName = `${Date.now()}-${slug(title)}.mp3`;
-  const id = generateTrackId();
-
-  try {
-    let coverBuffer = null;
-    let coverName = null;
-    const coverUrl = await searchCoverFromItunes(artist, title);
-
-    if (coverUrl) {
-      const downloaded = await downloadImage(coverUrl);
-      if (downloaded) {
-        coverBuffer = downloaded;
-        coverName = `${Date.now()}-${slug(title || artist)}.jpg`;
-      }
-    }
-
-    if (useSupabase) {
-      const songPath = `music/${songName}`;
-      let uploadResult = await supabase.storage.from(SUPABASE_BUCKET).upload(songPath, req.file.buffer, { contentType: 'audio/mpeg', upsert: false });
-      if (uploadResult.error) throw uploadResult.error;
-
-      if (coverBuffer && coverName) {
-        uploadResult = await supabase.storage.from(SUPABASE_BUCKET).upload(`covers/${coverName}`, coverBuffer, { contentType: 'image/jpeg', upsert: false });
-      }
-
-      const row = {
-        id, title, artist, album, year,
-        file_name: songName, cover_file: coverName, duration: null,
-        is_manual: true,
-        file_url: publicStorageUrl('music', songName),
-        cover_url: coverName ? publicStorageUrl('covers', coverName) : null
-      };
-
-      const insertResult = await supabase.from('music_tracks').insert(row).select().single();
-      if (insertResult.error) throw insertResult.error;
-
-      await refreshCatalog();
-      return res.status(201).json({ ok: true, track: convertSupabaseTrack(insertResult.data) });
-    }
-
-    fs.writeFileSync(path.join(MUSIC_DIR, songName), req.file.buffer);
-    if (coverBuffer && coverName) fs.writeFileSync(path.join(COVERS_DIR, coverName), coverBuffer);
-
-    const track = { id, title, artist, album, year, fileName: songName, file: localUrl('music', songName), cover: coverName ? localUrl('covers', coverName) : null, coverFile: coverName, duration: null, isManual: true };
-    catalog.push(track);
-    writeCatalog(catalog);
-
-    return res.status(201).json({ ok: true, track });
-  } catch (err) {
-    return res.status(500).json({ error: 'Error procesando la subida manual', details: err.message });
-  }
-});
-
 app.post('/api/scrape', requireApiKey, (req, res, next) => {
   const query = String(req.body.query || req.body.search || '').trim();
   const reqArtist = String(req.body.artist || '').trim();
@@ -844,7 +678,7 @@ app.post('/api/scrape', requireApiKey, (req, res, next) => {
     return res.status(400).json({ error: 'Se requiere término de búsqueda' });
   }
 
-  const task = { searchQuery, reqArtist, reqTitle, album: String(req.body.album || '').trim(), year: String(req.body.year || '').trim(), isManual: false };
+  const task = { searchQuery, reqArtist, reqTitle, album: String(req.body.album || '').trim(), year: String(req.body.year || '').trim() };
   const downloadPromise = new Promise((resolve, reject) => {
     task.resolve = resolve;
     task.reject = reject;
@@ -856,18 +690,21 @@ app.post('/api/scrape', requireApiKey, (req, res, next) => {
   downloadPromise.then(result => res.status(201).json(result)).catch(err => next(err));
 });
 
-app.post('/api/clean', requireApiKey, async (_req, res) => {
-  await cleanCatalogDuplicatesAndShorts();
-  res.json({ ok: true, totalRemaining: catalog.length });
-});
-
 app.delete('/api/tracks/:id', requireApiKey, async (req, res, next) => {
   try {
     const track = catalog.find(item => String(item.id) === String(req.params.id));
     if (!track) return res.status(404).json({ error: 'Canción no encontrada' });
 
-    await deleteTrackFromSystem(track);
-    await refreshCatalog();
+    if (useSupabase) {
+      await supabase.storage.from(SUPABASE_BUCKET).remove([`music/${track.fileName}`, ...(track.coverFile ? [`covers/${track.coverFile}`] : [])]);
+      await supabase.from('music_tracks').delete().eq('id', track.id);
+      await refreshCatalog();
+      return res.json({ ok: true, total: catalog.length });
+    }
+
+    const index = catalog.findIndex(item => String(item.id) === String(req.params.id));
+    catalog.splice(index, 1);
+    writeCatalog(catalog);
     return res.json({ ok: true, total: catalog.length });
   } catch (error) {
     next(error);
@@ -903,7 +740,7 @@ function startKeepAlive() {
 
 app.listen(PORT, async () => {
   console.log(`Sekai Music Server corriendo en puerto ${PORT}`);
-  await cleanCatalogDuplicatesAndShorts();
+  await refreshCatalog();
   startKeepAlive();
   // Ejecutar scraper automático al iniciar
   autoScrapeTrendsAndArtists();
