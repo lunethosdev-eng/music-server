@@ -1,15 +1,15 @@
 /**
  * ============================================================
- * SEKAI MUSIC SERVER - Versión Profesional / Enterprise
+ * SEKAI MUSIC SERVER - Versión Profesional / Enterprise (Fixed)
  * - Soporte Supabase + Almacenamiento Local
  * - Fallback Inteligente SoundCloud -> YouTube
- * - Cola con Doble Prioridad (Alta: App Search / Baja: AutoScraper)
+ * - Cola con Doble Prioridad + Timeout de seguridad
  * - Filtro estricto <= 60s + Etiquetado ID3 (.mp3)
  * - Búsqueda Tolerante a Errores (Fuzzy Search con Fuse.js)
  * - Integración de Letras de Canciones (LRCLIB API)
  * - Normalización de Audio y Conversión mediante FFmpeg
  * - Paginación, Filtros y Ordenamiento en /api/catalog
- * - Cobertura de Covers Animados (GIF / Apple Music)
+ * - Cobertura de Covers (iTunes / Apple Music)
  * - Limpieza Automática de Duplicados (Protegiendo is_manual: true)
  * - Métrica de Reproducciones y Dashboard de Control
  * ============================================================
@@ -47,9 +47,9 @@ const NOTIFICATION_EMAIL = 'lunethos.dev@gmail.com';
 let downloadedInLastInterval = [];
 
 const SEED_ARTISTS = [
-  'late night drive home', 'Eve', 'Grupo Frontera', 'Laufey', "Her's", 
-  'Depresión Sonora', 'Bad Bunny', 'Peso Pluma', 'YOASOBI', 'Ado', 
-  'Taylor Swift', 'Billie Eilish', 'Feid', 'Karol G', 'The Neighbourhood', 
+  'late night drive home', 'Eve', 'Grupo Frontera', 'Laufey', "Her's",
+  'Depresión Sonora', 'Bad Bunny', 'Peso Pluma', 'YOASOBI', 'Ado',
+  'Taylor Swift', 'Billie Eilish', 'Feid', 'Karol G', 'The Neighbourhood',
   'Wallows', 'TV Girl', 'Cuco', 'Fujii Kaze', 'Kenshi Yonezu', 'Tatsuro Yamashita',
   'Sabrina Carpenter', 'Chappell Roan', 'Olivia Rodrigo', 'Stray Kids', 'NewJeans',
   'Kanye West', 'Kendrick Lamar', 'Travis Scott', 'Drake', 'Rauw Alejandro', 'Bizarrap'
@@ -248,21 +248,21 @@ function writeCatalog(catalogData) {
 function findCoverExt(title) {
   const base = slug(title);
   for (const extension of ['gif', 'jpg', 'jpeg', 'png', 'webp']) {
-    if (fs.existsSync(path.join(COVERS_DIR, `${base}.${extension}`))) return extension;
+    if (fs.existsSync(path.join(COVERS_DIR, `\( {base}. \){extension}`))) return extension;
   }
   return null;
 }
 
 function localUrl(folder, filename) {
-  return `/${folder}/${encodeURIComponent(filename)}?api_key=${encodeURIComponent(API_KEY)}`;
+  return `/\( {folder}/ \){encodeURIComponent(filename)}?api_key=${encodeURIComponent(API_KEY)}`;
 }
 
 function publicStorageUrl(folder, filename) {
-  return `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${folder}/${encodeURIComponent(filename)}`;
+  return `\( {SUPABASE_URL}/storage/v1/object/public/ \){SUPABASE_BUCKET}/\( {folder}/ \){encodeURIComponent(filename)}`;
 }
 
 function generateTrackId() {
-  return `sekai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return `sekai-\( {Date.now()}- \){Math.random().toString(36).slice(2, 8)}`;
 }
 
 async function getAudioDuration(filePath) {
@@ -296,12 +296,14 @@ function embedID3Tags(filePath, { title, artist, album, year, imageBuffer }) {
     artist: artist,
     album: album || 'Sekai Music',
     year: year || new Date().getFullYear().toString(),
-    image: imageBuffer ? {
-      mime: 'image/jpeg',
-      type: { id: 3, name: 'front cover' },
-      description: 'Cover',
-      imageBuffer: imageBuffer
-    } : undefined
+    image: imageBuffer
+      ? {
+          mime: 'image/jpeg',
+          type: { id: 3, name: 'front cover' },
+          description: 'Cover',
+          imageBuffer: imageBuffer
+        }
+      : undefined
   };
   nodeID3.write(tags, filePath);
 }
@@ -312,7 +314,9 @@ function embedID3Tags(filePath, { title, artist, album, year, imageBuffer }) {
 
 async function fetchLyrics(artist, title) {
   try {
-    const res = await fetch(`https://lrclib.net/api/get?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(title)}`);
+    const res = await fetch(
+      `https://lrclib.net/api/get?artist_name=\( {encodeURIComponent(artist)}&track_name= \){encodeURIComponent(title)}`
+    );
     if (!res.ok) return null;
     const data = await res.json();
     return {
@@ -351,8 +355,10 @@ function scanCatalog() {
   const catalogData = files.map((fileName, index) => {
     const previous = byFile[fileName] || {};
     const parsed = parseFilename(fileName);
-    const id = previous.id || `sekai-${Date.now()}-${index}`;
-    const coverName = previous.coverFile || `${slug(previous.title || parsed.title)}.${findCoverExt(previous.title || parsed.title) || 'jpg'}`;
+    const id = previous.id || `sekai-\( {Date.now()}- \){index}`;
+    const coverName =
+      previous.coverFile ||
+      `\( {slug(previous.title || parsed.title)}. \){findCoverExt(previous.title || parsed.title) || 'jpg'}`;
     const coverExists = coverName && fs.existsSync(path.join(COVERS_DIR, coverName));
 
     return {
@@ -428,7 +434,9 @@ async function searchCoverFromItunes(artist, title) {
   if (!artist && !title) return null;
   try {
     const term = encodeURIComponent(`${artist} ${title}`.trim());
-    const response = await fetch(`https://itunes.apple.com/search?term=${term}&media=music&entity=song&limit=5`);
+    const response = await fetch(
+      `https://itunes.apple.com/search?term=${term}&media=music&entity=song&limit=5`
+    );
     if (!response.ok) return null;
     const data = await response.json();
     if (!data.results || data.results.length === 0) return null;
@@ -475,7 +483,7 @@ async function cleanDuplicatesAndShortTracks() {
       continue;
     }
 
-    const key = `${slug(track.artist)}-${slug(track.title)}`;
+    const key = `\( {slug(track.artist)}- \){slug(track.title)}`;
     if (seen.has(key)) {
       const existingTrack = seen.get(key);
       if (track.is_manual && !existingTrack.is_manual) {
@@ -490,10 +498,14 @@ async function cleanDuplicatesAndShortTracks() {
   }
 
   for (const track of toDelete) {
-    console.log(`[Clean-System] Eliminando pista inválida/duplicada: "${track.artist} - ${track.title}" (${track.duration || 'N/A'}s)`);
+    console.log(
+      `[Clean-System] Eliminando pista inválida/duplicada: "${track.artist} - \( {track.title}" ( \){track.duration || 'N/A'}s)`
+    );
     try {
       if (useSupabase) {
-        await supabase.storage.from(SUPABASE_BUCKET).remove([`music/${track.fileName}`, ...(track.coverFile ? [`covers/${track.coverFile}`] : [])]);
+        await supabase.storage
+          .from(SUPABASE_BUCKET)
+          .remove([`music/\( {track.fileName}`, ...(track.coverFile ? [`covers/ \){track.coverFile}`] : [])]);
         await supabase.from('music_tracks').delete().eq('id', track.id);
       } else {
         const musicPath = path.join(MUSIC_DIR, track.fileName);
@@ -516,23 +528,31 @@ async function cleanDuplicatesAndShortTracks() {
 setInterval(cleanDuplicatesAndShortTracks, 6 * 60 * 60 * 1000);
 
 // ============================================================
-// COLA CON DOBLE PRIORIDAD
+// COLA CON DOBLE PRIORIDAD + SAFETY TIMEOUT
 // ============================================================
 
 const highPriorityQueue = [];
 const lowPriorityQueue = [];
 let isDownloading = false;
+let lastDownloadStarted = 0;
 let completionTimer = null;
 let activeProcess = false;
+
+const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutos
 
 function checkQueueCompletion() {
   const totalQueueSize = highPriorityQueue.length + lowPriorityQueue.length;
   if (totalQueueSize === 0 && !isDownloading && activeProcess) {
     console.log('[Queue] La cola está vacía. Esperando confirmación...');
     clearTimeout(completionTimer);
-    
+
     completionTimer = setTimeout(async () => {
-      if (highPriorityQueue.length === 0 && lowPriorityQueue.length === 0 && !isDownloading && activeProcess) {
+      if (
+        highPriorityQueue.length === 0 &&
+        lowPriorityQueue.length === 0 &&
+        !isDownloading &&
+        activeProcess
+      ) {
         activeProcess = false;
         console.log('[Queue] Proceso concluido. Ejecutando limpieza y notificando...');
         await cleanDuplicatesAndShortTracks();
@@ -545,7 +565,15 @@ function checkQueueCompletion() {
 }
 
 async function processQueue() {
-  if (isDownloading) return;
+  // Safety: si lleva demasiado tiempo "descargando", forzamos reset
+  if (isDownloading) {
+    if (Date.now() - lastDownloadStarted > DOWNLOAD_TIMEOUT_MS) {
+      console.warn('[Queue] Forzando reset de isDownloading (timeout de 5 min)');
+      isDownloading = false;
+    } else {
+      return;
+    }
+  }
 
   const task = highPriorityQueue.shift() || lowPriorityQueue.shift();
 
@@ -555,12 +583,13 @@ async function processQueue() {
   }
 
   isDownloading = true;
+  lastDownloadStarted = Date.now();
   activeProcess = true;
   clearTimeout(completionTimer);
 
   try {
     const remaining = highPriorityQueue.length + lowPriorityQueue.length;
-    console.log(`[Queue] Descargando: "${task.searchQuery}" (${remaining} restantes)`);
+    console.log(`[Queue] Descargando: "\( {task.searchQuery}" ( \){remaining} restantes)`);
     const result = await executeScrape(task);
     if (task.resolve) task.resolve(result);
   } catch (err) {
@@ -578,6 +607,7 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
   const tempFilename = `norm-${Date.now()}`;
   const tempFilePath = path.join(DATA_DIR, `${tempFilename}.mp3`);
 
+  // Opciones mejoradas para yt-dlp
   const dlpOptions = {
     extractAudio: true,
     audioFormat: 'mp3',
@@ -585,10 +615,11 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
     noCheckCertificates: true,
     noWarnings: true,
     concurrentFragments: 1,
-    limitRate: '1M',
-    // FIX DE SEGURIDAD: Previene bloqueos HTTP 403 Forbidden simulando navegador
+    // limitRate: '1M', // desactivado para mayor velocidad y menos bloqueos
+    // Si tienes cookies de Chrome/Firefox, descomenta la línea siguiente:
+    // cookiesFromBrowser: 'chrome', // o 'firefox', 'edge'
     addHeader: [
-      'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
       'Accept-Language:es-ES,es;q=0.9,en;q=0.8'
     ]
   };
@@ -596,12 +627,22 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
   let downloadSuccess = false;
   let sourceUsed = 'SoundCloud';
 
+  console.log(`[Scrape] Intentando: "${searchQuery}"`);
+
   // Intento 1: SoundCloud
   try {
     await ytDlp(`scsearch1:${searchQuery}`, dlpOptions);
-    if (fs.existsSync(rawFilePath)) downloadSuccess = true;
+    if (fs.existsSync(rawFilePath) && fs.statSync(rawFilePath).size > 10000) {
+      downloadSuccess = true;
+      console.log(`[Scrape] SoundCloud OK`);
+    }
   } catch (err) {
-    if (fs.existsSync(rawFilePath)) try { fs.unlinkSync(rawFilePath); } catch (_) {}
+    console.log(`[Scrape] SoundCloud falló: ${err.message}`);
+    if (fs.existsSync(rawFilePath)) {
+      try {
+        fs.unlinkSync(rawFilePath);
+      } catch (_) {}
+    }
   }
 
   // Intento 2: YouTube (Respaldo)
@@ -609,33 +650,47 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
     try {
       sourceUsed = 'YouTube';
       await ytDlp(`ytsearch1:${searchQuery}`, dlpOptions);
-      if (fs.existsSync(rawFilePath)) downloadSuccess = true;
+      if (fs.existsSync(rawFilePath) && fs.statSync(rawFilePath).size > 10000) {
+        downloadSuccess = true;
+        console.log(`[Scrape] YouTube OK`);
+      }
     } catch (err) {
-      if (fs.existsSync(rawFilePath)) try { fs.unlinkSync(rawFilePath); } catch (_) {}
+      console.log(`[Scrape] YouTube falló: ${err.message}`);
+      if (fs.existsSync(rawFilePath)) {
+        try {
+          fs.unlinkSync(rawFilePath);
+        } catch (_) {}
+      }
       throw new Error(`Falló la descarga en SoundCloud y YouTube: ${err.message}`);
     }
   }
 
+  if (!downloadSuccess) {
+    throw new Error('No se pudo descargar ningún archivo válido');
+  }
+
   try {
+    // Normalización
     try {
       await normalizeAudio(rawFilePath, tempFilePath);
       if (fs.existsSync(rawFilePath)) fs.unlinkSync(rawFilePath);
     } catch (normErr) {
+      console.warn(`[Scrape] Normalización falló, usando archivo original: ${normErr.message}`);
       if (fs.existsSync(rawFilePath)) fs.renameSync(rawFilePath, tempFilePath);
     }
 
     const durationSecs = Math.round(await getAudioDuration(tempFilePath));
-    
+
     if (durationSecs > 0 && durationSecs <= 60 && !is_manual) {
       if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
-      throw new Error('El audio encontrado es una pista corta <= 60s.');
+      throw new Error(`El audio encontrado es una pista corta (${durationSecs}s <= 60s)`);
     }
 
     const parsed = parseFilename(searchQuery);
-    const title = reqTitle || parsed.title;
-    const artist = reqArtist || parsed.artist;
+    const title = reqTitle || parsed.title || searchQuery;
+    const artist = reqArtist || parsed.artist || 'Unknown';
     const id = generateTrackId();
-    const songName = `${Date.now()}-${slug(title)}.mp3`;
+    const songName = `\( {Date.now()}- \){slug(title)}.mp3`;
 
     let coverBuffer = null;
     let coverName = null;
@@ -645,7 +700,7 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
       const downloaded = await downloadImage(coverInfo.url);
       if (downloaded) {
         coverBuffer = downloaded;
-        coverName = `${Date.now()}-${slug(title || artist)}.${coverInfo.ext}`;
+        coverName = `\( {Date.now()}- \){slug(title || artist)}.${coverInfo.ext}`;
       }
     }
 
@@ -659,18 +714,24 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
 
     const lyricsData = await fetchLyrics(artist, title);
     const songBuffer = fs.readFileSync(tempFilePath);
-    try { fs.unlinkSync(tempFilePath); } catch (_) {}
+    try {
+      fs.unlinkSync(tempFilePath);
+    } catch (_) {}
 
     downloadedInLastInterval.push({ artist, title });
 
     if (useSupabase) {
       const songPath = `music/${songName}`;
-      let uploadResult = await supabase.storage.from(SUPABASE_BUCKET).upload(songPath, songBuffer, { contentType: 'audio/mpeg', upsert: false });
+      let uploadResult = await supabase.storage
+        .from(SUPABASE_BUCKET)
+        .upload(songPath, songBuffer, { contentType: 'audio/mpeg', upsert: false });
       if (uploadResult.error) throw uploadResult.error;
 
       if (coverBuffer && coverName) {
         const mime = coverName.endsWith('.gif') ? 'image/gif' : 'image/jpeg';
-        uploadResult = await supabase.storage.from(SUPABASE_BUCKET).upload(`covers/${coverName}`, coverBuffer, { contentType: mime, upsert: false });
+        uploadResult = await supabase.storage
+          .from(SUPABASE_BUCKET)
+          .upload(`covers/${coverName}`, coverBuffer, { contentType: mime, upsert: false });
         if (uploadResult.error) {
           await supabase.storage.from(SUPABASE_BUCKET).remove([songPath]);
           throw uploadResult.error;
@@ -678,8 +739,14 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
       }
 
       const row = {
-        id, title, artist, album, year,
-        file_name: songName, cover_file: coverName, duration: durationSecs,
+        id,
+        title,
+        artist,
+        album,
+        year,
+        file_name: songName,
+        cover_file: coverName,
+        duration: durationSecs,
         file_url: publicStorageUrl('music', songName),
         cover_url: coverName ? publicStorageUrl('covers', coverName) : null,
         plays: 0,
@@ -691,14 +758,26 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
       if (insertResult.error) throw insertResult.error;
 
       await refreshCatalog();
-      return { ok: true, source: sourceUsed, track: convertSupabaseTrack(insertResult.data), total: catalog.length };
+      return {
+        ok: true,
+        source: sourceUsed,
+        track: convertSupabaseTrack(insertResult.data),
+        total: catalog.length
+      };
     }
 
+    // Almacenamiento local
     fs.writeFileSync(path.join(MUSIC_DIR, songName), songBuffer);
-    if (coverBuffer && coverName) fs.writeFileSync(path.join(COVERS_DIR, coverName), coverBuffer);
+    if (coverBuffer && coverName) {
+      fs.writeFileSync(path.join(COVERS_DIR, coverName), coverBuffer);
+    }
 
     const track = {
-      id, title, artist, album, year,
+      id,
+      title,
+      artist,
+      album,
+      year,
       fileName: songName,
       file: localUrl('music', songName),
       cover: coverName ? localUrl('covers', coverName) : null,
@@ -713,10 +792,19 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
     writeCatalog(catalog);
     updateFuseIndex(catalog);
 
+    console.log(`[Scrape] Guardado: ${artist} - \( {title} ( \){durationSecs}s) vía ${sourceUsed}`);
     return { ok: true, source: sourceUsed, track, total: catalog.length };
   } catch (err) {
-    if (fs.existsSync(tempFilePath)) try { fs.unlinkSync(tempFilePath); } catch (_) {}
-    if (fs.existsSync(rawFilePath)) try { fs.unlinkSync(rawFilePath); } catch (_) {}
+    if (fs.existsSync(tempFilePath)) {
+      try {
+        fs.unlinkSync(tempFilePath);
+      } catch (_) {}
+    }
+    if (fs.existsSync(rawFilePath)) {
+      try {
+        fs.unlinkSync(rawFilePath);
+      } catch (_) {}
+    }
     throw err;
   }
 }
@@ -726,12 +814,23 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
 // ============================================================
 
 function addToQueueIfMissing(artist, title) {
-  const exists = catalog.some(c => 
-    c.title.toLowerCase().includes(title.toLowerCase()) && 
-    c.artist.toLowerCase().includes(artist.toLowerCase())
-  );
+  if (!artist || !title) return;
+
+  const artistLower = artist.toLowerCase().trim();
+  const titleLower = title.toLowerCase().trim();
+
+  // Más tolerante: solo rechaza si ambos coinciden de forma bastante cercana
+  const exists = catalog.some(c => {
+    const cArtist = (c.artist || '').toLowerCase();
+    const cTitle = (c.title || '').toLowerCase();
+    return (
+      (cTitle.includes(titleLower) || titleLower.includes(cTitle)) &&
+      (cArtist.includes(artistLower) || artistLower.includes(cArtist))
+    );
+  });
 
   if (!exists) {
+    console.log(`[Auto] Añadiendo a cola: ${artist} - ${title}`);
     lowPriorityQueue.push({
       searchQuery: `${artist} ${title}`,
       reqArtist: artist,
@@ -761,17 +860,21 @@ async function autoScrapeTrendsAndArtists() {
   const currentMonth = new Date().toLocaleString('es', { month: 'long' });
 
   for (const artist of SEED_ARTISTS) {
-    const data = await fetchWithRetry(`https://itunes.apple.com/search?term=${encodeURIComponent(artist)}&entity=song&limit=200`);
+    const data = await fetchWithRetry(
+      `https://itunes.apple.com/search?term=${encodeURIComponent(artist)}&entity=song&limit=50`
+    );
     if (data && data.results) {
       for (const item of data.results) {
         addToQueueIfMissing(item.artistName, item.trackName);
       }
     }
-    await delay(400);
+    await delay(500);
   }
 
   const query = `Top Hits ${currentMonth} ${currentYear}`;
-  const dataMonth = await fetchWithRetry(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=200`);
+  const dataMonth = await fetchWithRetry(
+    `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=50`
+  );
   if (dataMonth && dataMonth.results) {
     for (const item of dataMonth.results) {
       addToQueueIfMissing(item.artistName, item.trackName);
@@ -779,16 +882,18 @@ async function autoScrapeTrendsAndArtists() {
   }
 
   for (const genre of SEED_GENRES) {
-    const data = await fetchWithRetry(`https://itunes.apple.com/search?term=${encodeURIComponent(genre)}&entity=song&limit=200`);
+    const data = await fetchWithRetry(
+      `https://itunes.apple.com/search?term=${encodeURIComponent(genre)}&entity=song&limit=30`
+    );
     if (data && data.results) {
       for (const item of data.results) {
         addToQueueIfMissing(item.artistName, item.trackName);
       }
     }
-    await delay(400);
+    await delay(500);
   }
 
-  console.log(`[Auto-System] ${lowPriorityQueue.length} canciones agregadas exitosamente a la cola.`);
+  console.log(`[Auto-System] ${lowPriorityQueue.length} canciones agregadas a la cola.`);
   processQueue();
 }
 
@@ -811,6 +916,7 @@ app.get('/health', async (_req, res) => {
     tracks: catalog.length,
     highQueueSize: highPriorityQueue.length,
     lowQueueSize: lowPriorityQueue.length,
+    isDownloading,
     uptime: process.uptime()
   });
 });
@@ -842,7 +948,15 @@ app.get('/api/search', requireApiKey, async (req, res) => {
 
   console.log(`[App Search] Petición prioritaria recibida: "${q}".`);
 
-  const task = { searchQuery: q, reqArtist: '', reqTitle: q, album: '', year: '', is_manual: false };
+  const task = {
+    searchQuery: q,
+    reqArtist: '',
+    reqTitle: q,
+    album: '',
+    year: '',
+    is_manual: false
+  };
+
   const downloadPromise = new Promise((resolve, reject) => {
     task.resolve = resolve;
     task.reject = reject;
@@ -855,7 +969,10 @@ app.get('/api/search', requireApiKey, async (req, res) => {
     const result = await downloadPromise;
     return res.json({ source: 'downloaded_now', data: [result.track] });
   } catch (err) {
-    return res.status(500).json({ error: 'Error al descargar la canción requerida', details: err.message });
+    return res.status(500).json({
+      error: 'Error al descargar la canción requerida',
+      details: err.message
+    });
   }
 });
 
@@ -948,15 +1065,15 @@ app.post('/api/scrape', requireApiKey, (req, res, next) => {
     return res.status(400).json({ error: 'Se requiere término de búsqueda' });
   }
 
-  const task = { 
-    searchQuery, 
-    reqArtist, 
-    reqTitle, 
-    album: String(req.body.album || '').trim(), 
+  const task = {
+    searchQuery,
+    reqArtist,
+    reqTitle,
+    album: String(req.body.album || '').trim(),
     year: String(req.body.year || '').trim(),
     is_manual: Boolean(req.body.is_manual)
   };
-  
+
   const downloadPromise = new Promise((resolve, reject) => {
     task.resolve = resolve;
     task.reject = reject;
@@ -974,7 +1091,9 @@ app.delete('/api/tracks/:id', requireApiKey, async (req, res, next) => {
     if (!track) return res.status(404).json({ error: 'Canción no encontrada' });
 
     if (useSupabase) {
-      await supabase.storage.from(SUPABASE_BUCKET).remove([`music/${track.fileName}`, ...(track.coverFile ? [`covers/${track.coverFile}`] : [])]);
+      await supabase.storage
+        .from(SUPABASE_BUCKET)
+        .remove([`music/\( {track.fileName}`, ...(track.coverFile ? [`covers/ \){track.coverFile}`] : [])]);
       await supabase.from('music_tracks').delete().eq('id', track.id);
       await refreshCatalog();
       return res.json({ ok: true, total: catalog.length });
@@ -993,7 +1112,9 @@ app.delete('/api/tracks/:id', requireApiKey, async (req, res, next) => {
 app.get('/', (_req, res) => {
   try {
     const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-    res.type('html').send(html.replace('', `<script>window.SEKAI_API_KEY=${JSON.stringify(API_KEY)};</script>`));
+    res
+      .type('html')
+      .send(html.replace('', `<script>window.SEKAI_API_KEY=${JSON.stringify(API_KEY)};</script>`));
   } catch (err) {
     res.status(500).send('Error cargando index.html');
   }
@@ -1010,18 +1131,21 @@ app.use((error, _req, res, _next) => {
 function startKeepAlive() {
   const host = process.env.RENDER_EXTERNAL_URL || process.env.RENDER_EXTERNAL_HOSTNAME;
   if (!host) return;
-  const pingUrl = host.startsWith('http') ? `${host}/health` : `https://${host}/health`;
+  const pingUrl = host.startsWith('http') ? `\( {host}/health` : `https:// \){host}/health`;
 
   setInterval(async () => {
-    try { await fetch(pingUrl); } catch (_) {}
+    try {
+      await fetch(pingUrl);
+    } catch (_) {}
   }, 14 * 60 * 1000);
 }
 
 app.listen(PORT, async () => {
   console.log(`Sekai Music Server corriendo en puerto ${PORT}`);
+  console.log(`Storage: ${useSupabase ? 'Supabase' : 'Local'}`);
+  console.log(`API Key: ${API_KEY.slice(0, 8)}...`);
   await refreshCatalog();
   await cleanDuplicatesAndShortTracks();
   startKeepAlive();
   autoScrapeTrendsAndArtists();
 });
-
