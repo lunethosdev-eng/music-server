@@ -7,7 +7,7 @@
  *  - Fix WebSocket (ws) para Node 20
  *  - Keep-alive cada 14 minutos
  *  - Búsqueda automática de covers (iTunes)
- *  - Módulo de Scraping y Descarga de Música (yt-dlp)
+ *  - Módulo de Scraping y Descarga de Música (@distube/yt-dlp-exec)
  *  - Mejor logging y validaciones
  * ============================================================
  */
@@ -20,7 +20,7 @@ const multer = require('multer');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const ws = require('ws');
-const ytDlp = require('yt-dlp-exec');
+const ytDlp = require('@distube/yt-dlp-exec');
 
 // ============================================================
 // CONFIGURACIÓN BÁSICA
@@ -621,7 +621,7 @@ app.post(
 );
 
 // ============================================================
-// SCRAPING / EXTRACCIÓN AUTOMÁTICA DE MÚSICA (NUEVO)
+// SCRAPING / EXTRACCIÓN AUTOMÁTICA DE MÚSICA
 // ============================================================
 
 app.post('/api/scrape', requireApiKey, async (req, res, next) => {
@@ -643,7 +643,6 @@ app.post('/api/scrape', requireApiKey, async (req, res, next) => {
   try {
     console.log(`[Scraper] Iniciando extracción para: "${searchQuery}"`);
 
-    // Extracción de audio mediante yt-dlp
     await ytDlp(`ytsearch1:${searchQuery}`, {
       extractAudio: true,
       audioFormat: 'mp3',
@@ -658,11 +657,9 @@ app.post('/api/scrape', requireApiKey, async (req, res, next) => {
     }
 
     const songBuffer = fs.readFileSync(tempFilePath);
-    
-    // Limpieza de archivo temporal
+
     try { fs.unlinkSync(tempFilePath); } catch (_) {}
 
-    // Definición de metadata basada en solicitud o entrada previa
     const parsed = parseFilename(searchQuery);
     const title = reqTitle || parsed.title;
     const artist = reqArtist || parsed.artist;
@@ -672,7 +669,6 @@ app.post('/api/scrape', requireApiKey, async (req, res, next) => {
     const id = generateTrackId();
     const songName = `${Date.now()}-${slug(title)}.mp3`;
 
-    // Obtención de la carátula desde iTunes
     let coverBuffer = null;
     let coverName = null;
     const coverUrl = await searchCoverFromItunes(artist, title);
@@ -685,7 +681,6 @@ app.post('/api/scrape', requireApiKey, async (req, res, next) => {
       }
     }
 
-    // Guardado en Supabase
     if (useSupabase) {
       const songPath = `music/${songName}`;
 
@@ -748,7 +743,6 @@ app.post('/api/scrape', requireApiKey, async (req, res, next) => {
       });
     }
 
-    // Guardado en almacenamiento local
     const finalSongPath = path.join(MUSIC_DIR, songName);
     fs.writeFileSync(finalSongPath, songBuffer);
 
