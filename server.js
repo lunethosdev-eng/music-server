@@ -5,6 +5,9 @@
  *  - Soporte Supabase + Local
  *  - Descarga bajo demanda en tiempo real desde Apps (/api/search)
  *  - Auto-descarga de Artistas Famosos (2023-2026) y Tendencias
+ *  - Búsqueda en cascada: SoundCloud -> Proxies Invidious (YouTube)
+ *  - Filtro para evitar descargas <= 60s o contenido engañoso
+ *  - Limpieza automática de duplicados y audios cortos
  *  - Reporte acumulativo por Correo cada 10 minutos
  *  - Notificación automática por Email al finalizar la cola
  * ============================================================
@@ -324,7 +327,8 @@ function scanCatalog() {
       file: localUrl('music', fileName),
       cover: coverExists ? localUrl('covers', coverName) : previous.cover || null,
       coverFile: coverExists ? coverName : previous.coverFile || null,
-      duration: previous.duration || null
+      duration: previous.duration || null,
+      isManual: previous.isManual || fileName.toLowerCase().includes('harvey') || fileName.toLowerCase().includes('her')
     };
   });
 
@@ -335,7 +339,7 @@ function scanCatalog() {
 let catalog = scanCatalog();
 
 function convertSupabaseTrack(row) {
-  const fileName = row.file_name || row.fileName || row.filename || null;
+  const fileName = row.file_name || row.fileName || row.filename || '';
   const coverFile = row.cover_file || row.coverFile || null;
 
   return {
@@ -348,7 +352,8 @@ function convertSupabaseTrack(row) {
     file: row.file_url || (fileName ? publicStorageUrl('music', fileName) : null),
     cover: row.cover_url || (coverFile ? publicStorageUrl('covers', coverFile) : null),
     coverFile,
-    duration: row.duration || null
+    duration: row.duration || null,
+    isManual: Boolean(row.is_manual || row.isManual || fileName.toLowerCase().includes('harvey') || fileName.toLowerCase().includes('her'))
   };
 }
 
@@ -369,6 +374,78 @@ async function refreshCatalog() {
   }
   catalog = scanCatalog();
   return catalog;
+}
+
+// ============================================================
+// MÓDULO DE ELIMINACIÓN Y LIMPIEZA AUTOMÁTICA
+// ============================================================
+
+async function deleteTrackFromSystem(track) {
+  try {
+    if (useSupabase) {
+      const filesToRemove = [`music/${track.fileName}`];
+      if (track.coverFile) filesToRemove.push(`covers/${track.coverFile}`);
+      await supabase.storage.from(SUPABASE_BUCKET).remove(filesToRemove);
+      await supabase.from('music_tracks').delete().eq('id', track.id);
+    } else {
+      const filePath = path.join(MUSIC_DIR, track.fileName);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      if (track.coverFile) {
+        const coverPath = path.join(COVERS_DIR, track.coverFile);
+        if (fs.existsSync(coverPath)) fs.unlinkSync(coverPath);
+      }
+    }
+    console.log(`[Cleaner] Eliminado: "${track.artist} - ${track.title}" (${track.fileName})`);
+  } catch (err) {
+    console.error(`[Cleaner] Error eliminando ${track.fileName}:`, err.message);
+  }
+}
+
+async function cleanCatalogDuplicatesAndShorts() {
+  console.log('[Cleaner] Escaneando catálogo en busca de duplicados y audios cortos...');
+  await refreshCatalog();
+
+  const seenKeys = new Set();
+  const toDelete = [];
+
+  for (const track of catalog) {
+    const uniqueKey = `${track.artist.toLowerCase().trim()}_${track.title.toLowerCase().trim()}`;
+
+    // Proteger subidas manuales y archivos clave
+    const isProtected = track.isManual || 
+                        track.fileName.toLowerCase().includes('harvey') || 
+                        track.fileName.toLowerCase().includes('her');
+
+    // 1. Eliminar canciones cortas <= 60s (si no están protegidas)
+    if (track.duration && Number(track.duration) <= 60 && !isProtected) {
+      console.log(`[Cleaner] Canción corta identificada (<= 60s): "${track.artist} - ${track.title}" (${track.duration}s)`);
+      toDelete.push(track);
+      continue;
+    }
+
+    // 2. Eliminar duplicados manteniendo la primera instancia
+    if (seenKeys.has(uniqueKey)) {
+      if (isProtected) {
+        console.log(`[Cleaner] Omitida protección sobre archivo clave: "${track.artist} - ${track.title}"`);
+      } else {
+        console.log(`[Cleaner] Canción duplicada identificada: "${track.artist} - ${track.title}"`);
+        toDelete.push(track);
+      }
+    } else {
+      seenKeys.add(uniqueKey);
+    }
+  }
+
+  if (toDelete.length > 0) {
+    console.log(`[Cleaner] Procesando eliminación de ${toDelete.length} canciones...`);
+    for (const track of toDelete) {
+      await deleteTrackFromSystem(track);
+    }
+    await refreshCatalog();
+    console.log(`[Cleaner] Limpieza finalizada. Canciones activas en catálogo: ${catalog.length}`);
+  } else {
+    console.log('[Cleaner] Catálogo limpio. No se requirió eliminar registros.');
+  }
 }
 
 // ============================================================
@@ -420,8 +497,8 @@ function checkQueueCompletion() {
     completionTimer = setTimeout(async () => {
       if (downloadQueue.length === 0 && !isDownloading && activeProcess) {
         activeProcess = false;
-        console.log('[Queue] Proceso concluido. Enviando correo final...');
-        await refreshCatalog();
+        console.log('[Queue] Proceso concluido. Ejecutando mantenimiento final...');
+        await cleanCatalogDuplicatesAndShorts();
         await sendIntervalReportEmail(); // Enviar remanente de descargas
         await sendCompletionEmail(catalog.length);
       }
@@ -453,50 +530,79 @@ async function processQueue() {
   }
 }
 
-async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year }) {
+async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, isManual = false }) {
   const tempFilename = `scrape-${Date.now()}`;
   const tempFilePath = path.join(DATA_DIR, `${tempFilename}.mp3`);
 
-  try {
+  const title = reqTitle || '';
+  const artist = reqArtist || '';
+  const cleanQuery = `${artist} ${title}`.trim() || searchQuery;
+
+  // Fuetes en cascada: SoundCloud primero, luego Proxies Invidious / YouTube
+  const sources = [
+    { name: 'SoundCloud', value: `scsearch1:${cleanQuery}` },
+    { name: 'Invidious Proxy 1', value: `https://inv.tux.pizza/search?q=${encodeURIComponent(cleanQuery)}` },
+    { name: 'Invidious Proxy 2', value: `https://invidious.nerdvpn.de/search?q=${encodeURIComponent(cleanQuery)}` }
+  ];
+
+  let downloadSuccess = false;
+
+  for (const source of sources) {
+    console.log(`[Scrape] Probando fuente ${source.name}: "${cleanQuery}"`);
+
     const dlpOptions = {
       extractAudio: true,
       audioFormat: 'mp3',
+      audioQuality: '0',
       output: tempFilePath,
       noCheckCertificates: true,
       noWarnings: true,
-      concurrentFragments: 1,
-      limitRate: '1M'
+      matchFilter: isManual ? null : 'duration >= 60',
+      rejectTitle: 'remix|speed up|sped up|slowed|reverb|nightcore|cover|edit|lofi|instrumental'
     };
 
-    await ytDlp(`scsearch1:${searchQuery}`, dlpOptions);
+    try {
+      await ytDlp(source.value, dlpOptions);
 
-    if (!fs.existsSync(tempFilePath)) {
-      throw new Error('No se generó el archivo de audio');
+      if (fs.existsSync(tempFilePath) && fs.statSync(tempFilePath).size > 200000) {
+        downloadSuccess = true;
+        console.log(`[Scrape] Descarga completada correctamente desde ${source.name}`);
+        break;
+      }
+    } catch (err) {
+      console.warn(`[Scrape] Fallo al intentar descargar con ${source.name}. Probando siguiente opción...`);
+      if (fs.existsSync(tempFilePath)) try { fs.unlinkSync(tempFilePath); } catch (_) {}
     }
+  }
 
+  if (!downloadSuccess || !fs.existsSync(tempFilePath)) {
+    throw new Error('No se pudo encontrar una versión original completa en SoundCloud ni YouTube.');
+  }
+
+  try {
     const songBuffer = fs.readFileSync(tempFilePath);
     try { fs.unlinkSync(tempFilePath); } catch (_) {}
 
     const parsed = parseFilename(searchQuery);
-    const title = reqTitle || parsed.title;
-    const artist = reqArtist || parsed.artist;
+    const finalTitle = reqTitle || parsed.title;
+    const finalArtist = reqArtist || parsed.artist;
     const id = generateTrackId();
-    const songName = `${Date.now()}-${slug(title)}.mp3`;
+    const songName = `${Date.now()}-${slug(finalTitle)}.mp3`;
 
     let coverBuffer = null;
     let coverName = null;
-    const coverUrl = await searchCoverFromItunes(artist, title);
+    const coverUrl = await searchCoverFromItunes(finalArtist, finalTitle);
 
     if (coverUrl) {
       const downloaded = await downloadImage(coverUrl);
       if (downloaded) {
         coverBuffer = downloaded;
-        coverName = `${Date.now()}-${slug(title || artist)}.jpg`;
+        coverName = `${Date.now()}-${slug(finalTitle || finalArtist)}.jpg`;
       }
     }
 
     // Registrar descarga para el reporte de 10 min
-    downloadedInLastInterval.push({ artist, title });
+    downloadedInLastInterval.push({ artist: finalArtist, title: finalTitle });
 
     if (useSupabase) {
       const songPath = `music/${songName}`;
@@ -512,8 +618,9 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year }) 
       }
 
       const row = {
-        id, title, artist, album, year,
+        id, title: finalTitle, artist: finalArtist, album, year,
         file_name: songName, cover_file: coverName, duration: null,
+        is_manual: isManual,
         file_url: publicStorageUrl('music', songName),
         cover_url: coverName ? publicStorageUrl('covers', coverName) : null
       };
@@ -528,7 +635,7 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year }) 
     fs.writeFileSync(path.join(MUSIC_DIR, songName), songBuffer);
     if (coverBuffer && coverName) fs.writeFileSync(path.join(COVERS_DIR, coverName), coverBuffer);
 
-    const track = { id, title, artist, album, year, fileName: songName, file: localUrl('music', songName), cover: coverName ? localUrl('covers', coverName) : null, coverFile: coverName, duration: null };
+    const track = { id, title: finalTitle, artist: finalArtist, album, year, fileName: songName, file: localUrl('music', songName), cover: coverName ? localUrl('covers', coverName) : null, coverFile: coverName, duration: null, isManual };
     catalog.push(track);
     writeCatalog(catalog);
 
@@ -545,8 +652,8 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year }) 
 
 function addToQueueIfMissing(artist, title) {
   const exists = catalog.some(c => 
-    c.title.toLowerCase().includes(title.toLowerCase()) && 
-    c.artist.toLowerCase().includes(artist.toLowerCase())
+    c.title.toLowerCase().trim() === title.toLowerCase().trim() && 
+    c.artist.toLowerCase().trim() === artist.toLowerCase().trim()
   );
 
   if (!exists) {
@@ -555,7 +662,8 @@ function addToQueueIfMissing(artist, title) {
       reqArtist: artist,
       reqTitle: title,
       album: '',
-      year: ''
+      year: '',
+      isManual: false
     });
   }
 }
@@ -646,7 +754,7 @@ app.get('/api/search', requireApiKey, async (req, res) => {
 
   console.log(`[App Search] Petición externa recibida: "${q}". Añadiendo al frente de la cola...`);
 
-  const task = { searchQuery: q, reqArtist: '', reqTitle: q, album: '', year: '' };
+  const task = { searchQuery: q, reqArtist: '', reqTitle: q, album: '', year: '', isManual: false };
   const downloadPromise = new Promise((resolve, reject) => {
     task.resolve = resolve;
     task.reject = reject;
@@ -668,6 +776,66 @@ app.get('/api/catalog', requireApiKey, async (_req, res) => {
   res.json({ source: 'sekai-music-server', storage: useSupabase ? 'supabase' : 'local', total: catalog.length, data: catalog });
 });
 
+app.post('/api/upload', requireApiKey, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No se recibió ningún archivo de audio' });
+
+  const title = String(req.body.title || '').trim() || parseFilename(req.file.originalname).title;
+  const artist = String(req.body.artist || '').trim() || parseFilename(req.file.originalname).artist;
+  const album = String(req.body.album || '').trim();
+  const year = String(req.body.year || '').trim();
+  const songName = `${Date.now()}-${slug(title)}.mp3`;
+  const id = generateTrackId();
+
+  try {
+    let coverBuffer = null;
+    let coverName = null;
+    const coverUrl = await searchCoverFromItunes(artist, title);
+
+    if (coverUrl) {
+      const downloaded = await downloadImage(coverUrl);
+      if (downloaded) {
+        coverBuffer = downloaded;
+        coverName = `${Date.now()}-${slug(title || artist)}.jpg`;
+      }
+    }
+
+    if (useSupabase) {
+      const songPath = `music/${songName}`;
+      let uploadResult = await supabase.storage.from(SUPABASE_BUCKET).upload(songPath, req.file.buffer, { contentType: 'audio/mpeg', upsert: false });
+      if (uploadResult.error) throw uploadResult.error;
+
+      if (coverBuffer && coverName) {
+        uploadResult = await supabase.storage.from(SUPABASE_BUCKET).upload(`covers/${coverName}`, coverBuffer, { contentType: 'image/jpeg', upsert: false });
+      }
+
+      const row = {
+        id, title, artist, album, year,
+        file_name: songName, cover_file: coverName, duration: null,
+        is_manual: true,
+        file_url: publicStorageUrl('music', songName),
+        cover_url: coverName ? publicStorageUrl('covers', coverName) : null
+      };
+
+      const insertResult = await supabase.from('music_tracks').insert(row).select().single();
+      if (insertResult.error) throw insertResult.error;
+
+      await refreshCatalog();
+      return res.status(201).json({ ok: true, track: convertSupabaseTrack(insertResult.data) });
+    }
+
+    fs.writeFileSync(path.join(MUSIC_DIR, songName), req.file.buffer);
+    if (coverBuffer && coverName) fs.writeFileSync(path.join(COVERS_DIR, coverName), coverBuffer);
+
+    const track = { id, title, artist, album, year, fileName: songName, file: localUrl('music', songName), cover: coverName ? localUrl('covers', coverName) : null, coverFile: coverName, duration: null, isManual: true };
+    catalog.push(track);
+    writeCatalog(catalog);
+
+    return res.status(201).json({ ok: true, track });
+  } catch (err) {
+    return res.status(500).json({ error: 'Error procesando la subida manual', details: err.message });
+  }
+});
+
 app.post('/api/scrape', requireApiKey, (req, res, next) => {
   const query = String(req.body.query || req.body.search || '').trim();
   const reqArtist = String(req.body.artist || '').trim();
@@ -678,7 +846,7 @@ app.post('/api/scrape', requireApiKey, (req, res, next) => {
     return res.status(400).json({ error: 'Se requiere término de búsqueda' });
   }
 
-  const task = { searchQuery, reqArtist, reqTitle, album: String(req.body.album || '').trim(), year: String(req.body.year || '').trim() };
+  const task = { searchQuery, reqArtist, reqTitle, album: String(req.body.album || '').trim(), year: String(req.body.year || '').trim(), isManual: false };
   const downloadPromise = new Promise((resolve, reject) => {
     task.resolve = resolve;
     task.reject = reject;
@@ -690,21 +858,18 @@ app.post('/api/scrape', requireApiKey, (req, res, next) => {
   downloadPromise.then(result => res.status(201).json(result)).catch(err => next(err));
 });
 
+app.post('/api/clean', requireApiKey, async (_req, res) => {
+  await cleanCatalogDuplicatesAndShorts();
+  res.json({ ok: true, totalRemaining: catalog.length });
+});
+
 app.delete('/api/tracks/:id', requireApiKey, async (req, res, next) => {
   try {
     const track = catalog.find(item => String(item.id) === String(req.params.id));
     if (!track) return res.status(404).json({ error: 'Canción no encontrada' });
 
-    if (useSupabase) {
-      await supabase.storage.from(SUPABASE_BUCKET).remove([`music/${track.fileName}`, ...(track.coverFile ? [`covers/${track.coverFile}`] : [])]);
-      await supabase.from('music_tracks').delete().eq('id', track.id);
-      await refreshCatalog();
-      return res.json({ ok: true, total: catalog.length });
-    }
-
-    const index = catalog.findIndex(item => String(item.id) === String(req.params.id));
-    catalog.splice(index, 1);
-    writeCatalog(catalog);
+    await deleteTrackFromSystem(track);
+    await refreshCatalog();
     return res.json({ ok: true, total: catalog.length });
   } catch (error) {
     next(error);
@@ -740,9 +905,8 @@ function startKeepAlive() {
 
 app.listen(PORT, async () => {
   console.log(`Sekai Music Server corriendo en puerto ${PORT}`);
-  await refreshCatalog();
+  await cleanCatalogDuplicatesAndShorts();
   startKeepAlive();
   // Ejecutar scraper automático al iniciar
   autoScrapeTrendsAndArtists();
 });
-
