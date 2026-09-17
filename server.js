@@ -7,6 +7,7 @@
  *  - Fix WebSocket (ws) para Node 20
  *  - Keep-alive cada 14 minutos
  *  - Búsqueda automática de covers (iTunes)
+ *  - Módulo de Scraping y Descarga de Música (yt-dlp)
  *  - Mejor logging y validaciones
  * ============================================================
  */
@@ -19,6 +20,7 @@ const multer = require('multer');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const ws = require('ws');
+const ytDlp = require('yt-dlp-exec');
 
 // ============================================================
 // CONFIGURACIÓN BÁSICA
@@ -62,18 +64,12 @@ const useSupabase = Boolean(supabase);
 
 /**
  * Obtiene o crea una API Key segura.
- * Prioridad:
- * 1. Variable de entorno API_KEY (recomendada)
- * 2. Archivo api-key.json
- * 3. Generar una nueva
  */
 function getOrCreateApiKey() {
-  // 1. Variable de entorno (la más estable)
   if (process.env.API_KEY && process.env.API_KEY.trim()) {
     return process.env.API_KEY.trim();
   }
 
-  // 2. Intentar leer del archivo
   try {
     if (fs.existsSync(API_KEY_FILE)) {
       const saved = JSON.parse(fs.readFileSync(API_KEY_FILE, 'utf8'));
@@ -85,7 +81,6 @@ function getOrCreateApiKey() {
     console.warn('No se pudo leer api-key.json:', err.message);
   }
 
-  // 3. Generar una nueva
   const key = crypto.randomBytes(32).toString('hex');
 
   try {
@@ -114,7 +109,6 @@ const API_KEY = getOrCreateApiKey();
 
 /**
  * Middleware de autenticación.
- * Acepta la key por header x-api-key o por query ?api_key=
  */
 function requireApiKey(req, res, next) {
   const supplied = req.get('x-api-key') || req.query.api_key || '';
@@ -158,9 +152,6 @@ app.use('/covers', requireApiKey, express.static(COVERS_DIR));
 // FUNCIONES DE UTILIDAD
 // ============================================================
 
-/**
- * Limpia nombres de archivo para que sean seguros.
- */
 function cleanName(name) {
   return String(name || '')
     .normalize('NFKC')
@@ -171,9 +162,6 @@ function cleanName(name) {
     .slice(0, 180);
 }
 
-/**
- * Genera un slug limpio a partir de un texto.
- */
 function slug(value) {
   return String(value || '')
     .normalize('NFKD')
@@ -184,10 +172,6 @@ function slug(value) {
     .slice(0, 80);
 }
 
-/**
- * Intenta extraer artista y título del nombre del archivo.
- * Formato esperado: "Artista - Título.mp3"
- */
 function parseFilename(name) {
   const base = name.replace(/\.(mp3|m4a|wav|ogg|flac)$/i, '');
   const parts = base.split(' - ');
@@ -205,9 +189,6 @@ function parseFilename(name) {
   };
 }
 
-/**
- * Lee el catálogo local desde catalog.json
- */
 function readCatalog() {
   try {
     const data = JSON.parse(fs.readFileSync(CATALOG_FILE, 'utf8'));
@@ -217,9 +198,6 @@ function readCatalog() {
   }
 }
 
-/**
- * Guarda el catálogo local
- */
 function writeCatalog(catalogData) {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -229,9 +207,6 @@ function writeCatalog(catalogData) {
   }
 }
 
-/**
- * Busca la extensión de una cover local por título
- */
 function findCoverExt(title) {
   const base = slug(title);
 
@@ -245,30 +220,18 @@ function findCoverExt(title) {
   return null;
 }
 
-/**
- * Genera URL local con API key
- */
 function localUrl(folder, filename) {
   return `/${folder}/${encodeURIComponent(filename)}?api_key=${encodeURIComponent(API_KEY)}`;
 }
 
-/**
- * Genera URL pública de Supabase Storage
- */
 function publicStorageUrl(folder, filename) {
   return `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${folder}/${encodeURIComponent(filename)}`;
 }
 
-/**
- * Genera un ID único para una canción
- */
 function generateTrackId() {
   return `sekai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/**
- * Genera un nombre de archivo seguro con timestamp
- */
 function generateFileName(originalName) {
   return `${Date.now()}-${cleanName(originalName)}`;
 }
@@ -277,9 +240,6 @@ function generateFileName(originalName) {
 // CATÁLOGO LOCAL
 // ============================================================
 
-/**
- * Escanea la carpeta de música y reconstruye el catálogo local
- */
 function scanCatalog() {
   const oldCatalog = readCatalog();
   const byFile = Object.fromEntries(
@@ -333,9 +293,6 @@ let catalog = scanCatalog();
 // CATÁLOGO SUPABASE
 // ============================================================
 
-/**
- * Convierte una fila de Supabase al formato de track del servidor
- */
 function convertSupabaseTrack(row) {
   const fileName = row.file_name || row.fileName || row.filename || null;
   const coverFile = row.cover_file || row.coverFile || null;
@@ -354,9 +311,6 @@ function convertSupabaseTrack(row) {
   };
 }
 
-/**
- * Obtiene el catálogo completo desde Supabase
- */
 async function getRemoteCatalog() {
   const result = await supabase
     .from('music_tracks')
@@ -370,9 +324,6 @@ async function getRemoteCatalog() {
   return (result.data || []).map(convertSupabaseTrack);
 }
 
-/**
- * Refresca el catálogo (Supabase o local)
- */
 async function refreshCatalog() {
   if (useSupabase) {
     try {
@@ -391,10 +342,6 @@ async function refreshCatalog() {
 // BÚSQUEDA AUTOMÁTICA DE COVERS (iTunes)
 // ============================================================
 
-/**
- * Busca un cover estático en iTunes Search API (gratis, sin API key)
- * Devuelve la URL de la imagen o null
- */
 async function searchCoverFromItunes(artist, title) {
   if (!artist && !title) return null;
 
@@ -416,18 +363,15 @@ async function searchCoverFromItunes(artist, title) {
       return null;
     }
 
-    // Buscamos el resultado más relevante
     const best = data.results.find(item =>
       item.artworkUrl100 || item.artworkUrl60
     );
 
     if (!best) return null;
 
-    // Preferimos la versión más grande posible
     let artwork = best.artworkUrl100 || best.artworkUrl60 || null;
 
     if (artwork) {
-      // Intentamos pedir una versión más grande
       artwork = artwork.replace('100x100bb', '600x600bb').replace('60x60bb', '600x600bb');
     }
 
@@ -438,9 +382,6 @@ async function searchCoverFromItunes(artist, title) {
   }
 }
 
-/**
- * Descarga una imagen desde una URL y la devuelve como Buffer
- */
 async function downloadImage(url) {
   try {
     const response = await fetch(url);
@@ -528,7 +469,7 @@ app.post('/api/rescan', requireApiKey, async (_req, res) => {
 });
 
 // ============================================================
-// SUBIR CANCIÓN
+// SUBIR CANCIÓN MANUALMENTE
 // ============================================================
 
 app.post(
@@ -556,16 +497,13 @@ app.post(
       const album = String(req.body.album || '').trim();
       const year = String(req.body.year || '').trim();
 
-      // ===== LÍNEAS CORREGIDAS =====
       const id = generateTrackId();
       const songName = generateFileName(song.originalname);
       let coverName = cover ? generateFileName(cover.originalname) : null;
-      // =============================
 
       let coverBuffer = cover ? cover.buffer : null;
       let coverMime = cover ? cover.mimetype : null;
 
-      // Si no subieron cover, intentamos buscarla automáticamente en iTunes
       if (!coverBuffer && (artist || title)) {
         console.log(`Buscando cover automática para: ${artist} - ${title}`);
         const coverUrl = await searchCoverFromItunes(artist, title);
@@ -580,10 +518,6 @@ app.post(
           }
         }
       }
-
-      // =========================
-      // SUBIDA A SUPABASE
-      // =========================
 
       if (useSupabase) {
         const songPath = `music/${songName}`;
@@ -651,10 +585,6 @@ app.post(
         });
       }
 
-      // =========================
-      // SUBIDA LOCAL
-      // =========================
-
       const songPath = path.join(MUSIC_DIR, songName);
       fs.writeFileSync(songPath, song.buffer);
 
@@ -691,6 +621,174 @@ app.post(
 );
 
 // ============================================================
+// SCRAPING / EXTRACCIÓN AUTOMÁTICA DE MÚSICA (NUEVO)
+// ============================================================
+
+app.post('/api/scrape', requireApiKey, async (req, res, next) => {
+  const query = String(req.body.query || req.body.search || '').trim();
+  const reqArtist = String(req.body.artist || '').trim();
+  const reqTitle = String(req.body.title || '').trim();
+
+  const searchQuery = query || `${reqArtist} ${reqTitle}`.trim();
+
+  if (!searchQuery) {
+    return res.status(400).json({
+      error: 'Se requiere un término de búsqueda (query, o bien artist y title)'
+    });
+  }
+
+  const tempFilename = `scrape-${Date.now()}`;
+  const tempFilePath = path.join(DATA_DIR, `${tempFilename}.mp3`);
+
+  try {
+    console.log(`[Scraper] Iniciando extracción para: "${searchQuery}"`);
+
+    // Extracción de audio mediante yt-dlp
+    await ytDlp(`ytsearch1:${searchQuery}`, {
+      extractAudio: true,
+      audioFormat: 'mp3',
+      output: tempFilePath,
+      noCheckCertificates: true,
+      noWarnings: true,
+      preferFreeFormats: true
+    });
+
+    if (!fs.existsSync(tempFilePath)) {
+      throw new Error('No se pudo generar el archivo de audio descargado');
+    }
+
+    const songBuffer = fs.readFileSync(tempFilePath);
+    
+    // Limpieza de archivo temporal
+    try { fs.unlinkSync(tempFilePath); } catch (_) {}
+
+    // Definición de metadata basada en solicitud o entrada previa
+    const parsed = parseFilename(searchQuery);
+    const title = reqTitle || parsed.title;
+    const artist = reqArtist || parsed.artist;
+    const album = String(req.body.album || '').trim();
+    const year = String(req.body.year || '').trim();
+
+    const id = generateTrackId();
+    const songName = `${Date.now()}-${slug(title)}.mp3`;
+
+    // Obtención de la carátula desde iTunes
+    let coverBuffer = null;
+    let coverName = null;
+    const coverUrl = await searchCoverFromItunes(artist, title);
+
+    if (coverUrl) {
+      const downloaded = await downloadImage(coverUrl);
+      if (downloaded) {
+        coverBuffer = downloaded;
+        coverName = `${Date.now()}-${slug(title || artist)}.jpg`;
+      }
+    }
+
+    // Guardado en Supabase
+    if (useSupabase) {
+      const songPath = `music/${songName}`;
+
+      let uploadResult = await supabase.storage
+        .from(SUPABASE_BUCKET)
+        .upload(songPath, songBuffer, {
+          contentType: 'audio/mpeg',
+          upsert: false
+        });
+
+      if (uploadResult.error) throw uploadResult.error;
+
+      if (coverBuffer && coverName) {
+        uploadResult = await supabase.storage
+          .from(SUPABASE_BUCKET)
+          .upload(`covers/${coverName}`, coverBuffer, {
+            contentType: 'image/jpeg',
+            upsert: false
+          });
+
+        if (uploadResult.error) {
+          await supabase.storage.from(SUPABASE_BUCKET).remove([songPath]);
+          throw uploadResult.error;
+        }
+      }
+
+      const row = {
+        id,
+        title,
+        artist,
+        album,
+        year,
+        file_name: songName,
+        cover_file: coverName,
+        duration: null,
+        file_url: publicStorageUrl('music', songName),
+        cover_url: coverName ? publicStorageUrl('covers', coverName) : null
+      };
+
+      const insertResult = await supabase
+        .from('music_tracks')
+        .insert(row)
+        .select()
+        .single();
+
+      if (insertResult.error) {
+        await supabase.storage
+          .from(SUPABASE_BUCKET)
+          .remove([songPath, ...(coverName ? [`covers/${coverName}`] : [])]);
+        throw insertResult.error;
+      }
+
+      await refreshCatalog();
+
+      return res.status(201).json({
+        ok: true,
+        source: 'scraped',
+        track: convertSupabaseTrack(insertResult.data),
+        total: catalog.length
+      });
+    }
+
+    // Guardado en almacenamiento local
+    const finalSongPath = path.join(MUSIC_DIR, songName);
+    fs.writeFileSync(finalSongPath, songBuffer);
+
+    if (coverBuffer && coverName) {
+      const coverPath = path.join(COVERS_DIR, coverName);
+      fs.writeFileSync(coverPath, coverBuffer);
+    }
+
+    const track = {
+      id,
+      title,
+      artist,
+      album,
+      year,
+      fileName: songName,
+      file: localUrl('music', songName),
+      cover: coverName ? localUrl('covers', coverName) : null,
+      coverFile: coverName,
+      duration: null
+    };
+
+    catalog.push(track);
+    writeCatalog(catalog);
+
+    return res.status(201).json({
+      ok: true,
+      source: 'scraped',
+      track,
+      total: catalog.length
+    });
+
+  } catch (error) {
+    if (fs.existsSync(tempFilePath)) {
+      try { fs.unlinkSync(tempFilePath); } catch (_) {}
+    }
+    next(error);
+  }
+});
+
+// ============================================================
 // ELIMINAR CANCIÓN
 // ============================================================
 
@@ -705,10 +803,6 @@ app.delete('/api/tracks/:id', requireApiKey, async (req, res, next) => {
         error: 'Canción no encontrada'
       });
     }
-
-    // =========================
-    // ELIMINAR DE SUPABASE
-    // =========================
 
     if (useSupabase) {
       const storagePaths = [
@@ -740,10 +834,6 @@ app.delete('/api/tracks/:id', requireApiKey, async (req, res, next) => {
         total: catalog.length
       });
     }
-
-    // =========================
-    // ELIMINAR LOCALMENTE
-    // =========================
 
     const index = catalog.findIndex(
       item => String(item.id) === String(req.params.id)
@@ -845,7 +935,7 @@ app.get('/api/lyrics', requireApiKey, async (req, res) => {
 });
 
 // ============================================================
-// BÚSQUEDA DE COVER MANUAL (endpoint extra)
+// BÚSQUEDA DE COVER MANUAL
 // ============================================================
 
 app.get('/api/cover-search', requireApiKey, async (req, res) => {
@@ -969,4 +1059,3 @@ app.listen(PORT, () => {
 
   startKeepAlive();
 });
-
