@@ -1,17 +1,17 @@
 /**
  * ============================================================
- *  SEKAI MUSIC SERVER - Versión Profesional / Enterprise
- *  - Soporte Supabase + Almacenamiento Local
- *  - Fallback Inteligente SoundCloud -> YouTube (Invidious)
- *  - Cola con Doble Prioridad (Alta: App Search / Baja: AutoScraper)
- *  - Filtro estricto <= 60s + Etiquetado ID3 (.mp3)
- *  - Búsqueda Tolerante a Errores (Fuzzy Search con Fuse.js)
- *  - Integración de Letras de Canciones (LRCLIB API)
- *  - Normalización de Audio y Conversión mediante FFmpeg
- *  - Paginación, Filtros y Ordenamiento en /api/catalog
- *  - Cobertura de Covers Animados (GIF / Apple Music)
- *  - Limpieza Automática de Duplicados (Protegiendo is_manual: true)
- *  - Métrica de Reproducciones y Dashboard de Control
+ * SEKAI MUSIC SERVER - Versión Profesional / Enterprise
+ * - Soporte Supabase + Almacenamiento Local
+ * - Fallback Inteligente SoundCloud -> YouTube
+ * - Cola con Doble Prioridad (Alta: App Search / Baja: AutoScraper)
+ * - Filtro estricto <= 60s + Etiquetado ID3 (.mp3)
+ * - Búsqueda Tolerante a Errores (Fuzzy Search con Fuse.js)
+ * - Integración de Letras de Canciones (LRCLIB API)
+ * - Normalización de Audio y Conversión mediante FFmpeg
+ * - Paginación, Filtros y Ordenamiento en /api/catalog
+ * - Cobertura de Covers Animados (GIF / Apple Music)
+ * - Limpieza Automática de Duplicados (Protegiendo is_manual: true)
+ * - Métrica de Reproducciones y Dashboard de Control
  * ============================================================
  */
 
@@ -46,7 +46,6 @@ const API_KEY_FILE = path.join(DATA_DIR, 'api-key.json');
 const NOTIFICATION_EMAIL = 'lunethos.dev@gmail.com';
 let downloadedInLastInterval = [];
 
-// Lista de Artistas y Términos Ampliada para superar el límite de 150
 const SEED_ARTISTS = [
   'late night drive home', 'Eve', 'Grupo Frontera', 'Laufey', "Her's", 
   'Depresión Sonora', 'Bad Bunny', 'Peso Pluma', 'YOASOBI', 'Ado', 
@@ -437,12 +436,6 @@ async function searchCoverFromItunes(artist, title) {
     const best = data.results.find(item => item.artworkUrl100 || item.artworkUrl60);
     if (!best) return null;
 
-    if (best.artistId) {
-      const animatedUrl = `https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/animated-cover.gif`; 
-      const testAnim = await fetch(animatedUrl, { method: 'HEAD' });
-      if (testAnim.ok) return { url: animatedUrl, ext: 'gif', isAnimated: true };
-    }
-
     let artwork = best.artworkUrl100 || best.artworkUrl60 || null;
     if (artwork) {
       artwork = artwork.replace('100x100bb', '600x600bb').replace('60x60bb', '600x600bb');
@@ -477,7 +470,6 @@ async function cleanDuplicatesAndShortTracks() {
   const toDelete = [];
 
   for (const track of catalog) {
-    // Solamente eliminar si la duración fue leída y es <= 60s
     if (track.duration && Number(track.duration) > 0 && Number(track.duration) <= 60 && !track.is_manual) {
       toDelete.push(track);
       continue;
@@ -572,10 +564,11 @@ async function processQueue() {
     const result = await executeScrape(task);
     if (task.resolve) task.resolve(result);
   } catch (err) {
+    console.error(`[Queue Error] Falló la tarea "${task.searchQuery}":`, err.message);
     if (task.reject) task.reject(err);
   } finally {
     isDownloading = false;
-    setTimeout(processQueue, 2000);
+    setTimeout(processQueue, 2500);
   }
 }
 
@@ -592,12 +585,18 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
     noCheckCertificates: true,
     noWarnings: true,
     concurrentFragments: 1,
-    limitRate: '1M'
+    limitRate: '1M',
+    // FIX DE SEGURIDAD: Previene bloqueos HTTP 403 Forbidden simulando navegador
+    addHeader: [
+      'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Accept-Language:es-ES,es;q=0.9,en;q=0.8'
+    ]
   };
 
   let downloadSuccess = false;
   let sourceUsed = 'SoundCloud';
 
+  // Intento 1: SoundCloud
   try {
     await ytDlp(`scsearch1:${searchQuery}`, dlpOptions);
     if (fs.existsSync(rawFilePath)) downloadSuccess = true;
@@ -605,6 +604,7 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
     if (fs.existsSync(rawFilePath)) try { fs.unlinkSync(rawFilePath); } catch (_) {}
   }
 
+  // Intento 2: YouTube (Respaldo)
   if (!downloadSuccess) {
     try {
       sourceUsed = 'YouTube';
@@ -619,16 +619,15 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
   try {
     try {
       await normalizeAudio(rawFilePath, tempFilePath);
-      fs.unlinkSync(rawFilePath);
+      if (fs.existsSync(rawFilePath)) fs.unlinkSync(rawFilePath);
     } catch (normErr) {
-      fs.renameSync(rawFilePath, tempFilePath);
+      if (fs.existsSync(rawFilePath)) fs.renameSync(rawFilePath, tempFilePath);
     }
 
     const durationSecs = Math.round(await getAudioDuration(tempFilePath));
     
-    // Validación de duración pos-normalización
     if (durationSecs > 0 && durationSecs <= 60 && !is_manual) {
-      fs.unlinkSync(tempFilePath);
+      if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
       throw new Error('El audio encontrado es una pista corta <= 60s.');
     }
 
@@ -723,7 +722,7 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
 }
 
 // ============================================================
-// AUTO-SCRAPE INTELIGENTE (OPTIMIZADO Y SIN LÍMITE DE 150)
+// AUTO-SCRAPE INTELIGENTE
 // ============================================================
 
 function addToQueueIfMissing(artist, title) {
@@ -749,7 +748,7 @@ async function fetchWithRetry(url, retries = 3) {
     try {
       const res = await fetch(url);
       if (res.ok) return await res.json();
-      if (res.status === 429) await delay(3000 * (i + 1)); // Si hay bloqueo por IP, esperar
+      if (res.status === 429) await delay(3000 * (i + 1));
     } catch (_) {}
     await delay(1000);
   }
@@ -761,7 +760,6 @@ async function autoScrapeTrendsAndArtists() {
   const currentYear = new Date().getFullYear();
   const currentMonth = new Date().toLocaleString('es', { month: 'long' });
 
-  // 1. Obtener hasta 200 canciones por artista con pausas de 400ms para evitar rate limiting
   for (const artist of SEED_ARTISTS) {
     const data = await fetchWithRetry(`https://itunes.apple.com/search?term=${encodeURIComponent(artist)}&entity=song&limit=200`);
     if (data && data.results) {
@@ -772,7 +770,6 @@ async function autoScrapeTrendsAndArtists() {
     await delay(400);
   }
 
-  // 2. Obtener hits del mes actual
   const query = `Top Hits ${currentMonth} ${currentYear}`;
   const dataMonth = await fetchWithRetry(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=200`);
   if (dataMonth && dataMonth.results) {
@@ -781,7 +778,6 @@ async function autoScrapeTrendsAndArtists() {
     }
   }
 
-  // 3. Obtener hasta 200 canciones por género con pausas
   for (const genre of SEED_GENRES) {
     const data = await fetchWithRetry(`https://itunes.apple.com/search?term=${encodeURIComponent(genre)}&entity=song&limit=200`);
     if (data && data.results) {
@@ -866,11 +862,8 @@ app.get('/api/search', requireApiKey, async (req, res) => {
 app.get('/api/catalog', requireApiKey, async (req, res) => {
   await refreshCatalog();
 
-  let page = parseInt(req.query.page) || 1;
-  let limit = parseInt(req.query.limit) || 50;
-  let sort = req.query.sort || 'latest';
-
   let data = [...catalog];
+  let sort = req.query.sort || 'latest';
 
   if (sort === 'popular') {
     data.sort((a, b) => (b.plays || 0) - (a.plays || 0));
@@ -880,17 +873,27 @@ app.get('/api/catalog', requireApiKey, async (req, res) => {
     data.sort((a, b) => a.title.localeCompare(b.title));
   }
 
-  const startIndex = (page - 1) * limit;
-  const endIndex = page * limit;
-  const paginatedData = data.slice(startIndex, endIndex);
+  if (req.query.page || req.query.limit) {
+    let page = parseInt(req.query.page) || 1;
+    let limit = parseInt(req.query.limit) || 50;
+    const startIndex = (page - 1) * limit;
+    const endIndex = page * limit;
+
+    return res.json({
+      source: 'sekai-music-server',
+      storage: useSupabase ? 'supabase' : 'local',
+      total: catalog.length,
+      page,
+      totalPages: Math.ceil(catalog.length / limit),
+      data: data.slice(startIndex, endIndex)
+    });
+  }
 
   res.json({
     source: 'sekai-music-server',
     storage: useSupabase ? 'supabase' : 'local',
     total: catalog.length,
-    page,
-    totalPages: Math.ceil(catalog.length / limit),
-    data: paginatedData
+    data
   });
 });
 
@@ -990,7 +993,7 @@ app.delete('/api/tracks/:id', requireApiKey, async (req, res, next) => {
 app.get('/', (_req, res) => {
   try {
     const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-    res.type('html').send(html.replace('<!-- API_KEY_INJECT -->', `<script>window.SEKAI_API_KEY=${JSON.stringify(API_KEY)};</script>`));
+    res.type('html').send(html.replace('', `<script>window.SEKAI_API_KEY=${JSON.stringify(API_KEY)};</script>`));
   } catch (err) {
     res.status(500).send('Error cargando index.html');
   }
