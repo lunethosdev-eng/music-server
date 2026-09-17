@@ -1,8 +1,8 @@
 {
   "name": "sekai-music-server",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
-  "description": "Servidor de música para Sekai: catálogo, lyrics, upload y auto-scrape",
+  "description": "Servidor de música para Sekai: catálogo, lyrics, upload, auto-scrape y notificaciones por correo",
   "main": "server.js",
   "author": "Yyyy",
   "license": "MIT",
@@ -19,6 +19,7 @@
     "cors": "^2.8.5",
     "express": "^4.21.0",
     "multer": "^1.4.5-lts.1",
+    "nodemailer": "^6.9.15",
     "ws": "^8.18.0",
     "youtube-dl-exec": "^3.0.12"
   },
@@ -29,7 +30,8 @@
     "streaming",
     "catalog",
     "lyrics",
-    "scraper"
+    "scraper",
+    "notifications"
   ],
   "repository": {
     "type": "git",
