@@ -12,6 +12,7 @@
  * - Cobertura de Covers (iTunes / Apple Music)
  * - Limpieza Automática de Duplicados (Protegiendo is_manual: true)
  * - Métrica de Reproducciones y Dashboard de Control
+ * - Notificaciones y Reportes por Correo (Cada 10 min y al finalizar)
  * ============================================================
  */
 
@@ -248,21 +249,21 @@ function writeCatalog(catalogData) {
 function findCoverExt(title) {
   const base = slug(title);
   for (const extension of ['gif', 'jpg', 'jpeg', 'png', 'webp']) {
-    if (fs.existsSync(path.join(COVERS_DIR, `\( {base}. \){extension}`))) return extension;
+    if (fs.existsSync(path.join(COVERS_DIR, `${base}.${extension}`))) return extension;
   }
   return null;
 }
 
 function localUrl(folder, filename) {
-  return `/\( {folder}/ \){encodeURIComponent(filename)}?api_key=${encodeURIComponent(API_KEY)}`;
+  return `/${folder}/${encodeURIComponent(filename)}?api_key=${encodeURIComponent(API_KEY)}`;
 }
 
 function publicStorageUrl(folder, filename) {
-  return `\( {SUPABASE_URL}/storage/v1/object/public/ \){SUPABASE_BUCKET}/\( {folder}/ \){encodeURIComponent(filename)}`;
+  return `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${folder}/${encodeURIComponent(filename)}`;
 }
 
 function generateTrackId() {
-  return `sekai-\( {Date.now()}- \){Math.random().toString(36).slice(2, 8)}`;
+  return `sekai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 async function getAudioDuration(filePath) {
@@ -315,7 +316,7 @@ function embedID3Tags(filePath, { title, artist, album, year, imageBuffer }) {
 async function fetchLyrics(artist, title) {
   try {
     const res = await fetch(
-      `https://lrclib.net/api/get?artist_name=\( {encodeURIComponent(artist)}&track_name= \){encodeURIComponent(title)}`
+      `https://lrclib.net/api/get?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(title)}`
     );
     if (!res.ok) return null;
     const data = await res.json();
@@ -355,10 +356,10 @@ function scanCatalog() {
   const catalogData = files.map((fileName, index) => {
     const previous = byFile[fileName] || {};
     const parsed = parseFilename(fileName);
-    const id = previous.id || `sekai-\( {Date.now()}- \){index}`;
+    const id = previous.id || `sekai-${Date.now()}-${index}`;
     const coverName =
       previous.coverFile ||
-      `\( {slug(previous.title || parsed.title)}. \){findCoverExt(previous.title || parsed.title) || 'jpg'}`;
+      `${slug(previous.title || parsed.title)}.${findCoverExt(previous.title || parsed.title) || 'jpg'}`;
     const coverExists = coverName && fs.existsSync(path.join(COVERS_DIR, coverName));
 
     return {
@@ -483,7 +484,7 @@ async function cleanDuplicatesAndShortTracks() {
       continue;
     }
 
-    const key = `\( {slug(track.artist)}- \){slug(track.title)}`;
+    const key = `${slug(track.artist)}-${slug(track.title)}`;
     if (seen.has(key)) {
       const existingTrack = seen.get(key);
       if (track.is_manual && !existingTrack.is_manual) {
@@ -499,13 +500,13 @@ async function cleanDuplicatesAndShortTracks() {
 
   for (const track of toDelete) {
     console.log(
-      `[Clean-System] Eliminando pista inválida/duplicada: "${track.artist} - \( {track.title}" ( \){track.duration || 'N/A'}s)`
+      `[Clean-System] Eliminando pista inválida/duplicada: "${track.artist} - ${track.title}" (${track.duration || 'N/A'}s)`
     );
     try {
       if (useSupabase) {
         await supabase.storage
           .from(SUPABASE_BUCKET)
-          .remove([`music/\( {track.fileName}`, ...(track.coverFile ? [`covers/ \){track.coverFile}`] : [])]);
+          .remove([`music/${track.fileName}`, ...(track.coverFile ? [`covers/${track.coverFile}`] : [])]);
         await supabase.from('music_tracks').delete().eq('id', track.id);
       } else {
         const musicPath = path.join(MUSIC_DIR, track.fileName);
@@ -538,7 +539,7 @@ let lastDownloadStarted = 0;
 let completionTimer = null;
 let activeProcess = false;
 
-const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutos
+const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 
 function checkQueueCompletion() {
   const totalQueueSize = highPriorityQueue.length + lowPriorityQueue.length;
@@ -565,7 +566,6 @@ function checkQueueCompletion() {
 }
 
 async function processQueue() {
-  // Safety: si lleva demasiado tiempo "descargando", forzamos reset
   if (isDownloading) {
     if (Date.now() - lastDownloadStarted > DOWNLOAD_TIMEOUT_MS) {
       console.warn('[Queue] Forzando reset de isDownloading (timeout de 5 min)');
@@ -589,7 +589,7 @@ async function processQueue() {
 
   try {
     const remaining = highPriorityQueue.length + lowPriorityQueue.length;
-    console.log(`[Queue] Descargando: "\( {task.searchQuery}" ( \){remaining} restantes)`);
+    console.log(`[Queue] Descargando: "${task.searchQuery}" (${remaining} restantes)`);
     const result = await executeScrape(task);
     if (task.resolve) task.resolve(result);
   } catch (err) {
@@ -607,7 +607,6 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
   const tempFilename = `norm-${Date.now()}`;
   const tempFilePath = path.join(DATA_DIR, `${tempFilename}.mp3`);
 
-  // Opciones mejoradas para yt-dlp
   const dlpOptions = {
     extractAudio: true,
     audioFormat: 'mp3',
@@ -615,9 +614,6 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
     noCheckCertificates: true,
     noWarnings: true,
     concurrentFragments: 1,
-    // limitRate: '1M', // desactivado para mayor velocidad y menos bloqueos
-    // Si tienes cookies de Chrome/Firefox, descomenta la línea siguiente:
-    // cookiesFromBrowser: 'chrome', // o 'firefox', 'edge'
     addHeader: [
       'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
       'Accept-Language:es-ES,es;q=0.9,en;q=0.8'
@@ -627,39 +623,27 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
   let downloadSuccess = false;
   let sourceUsed = 'SoundCloud';
 
-  console.log(`[Scrape] Intentando: "${searchQuery}"`);
-
-  // Intento 1: SoundCloud
   try {
     await ytDlp(`scsearch1:${searchQuery}`, dlpOptions);
     if (fs.existsSync(rawFilePath) && fs.statSync(rawFilePath).size > 10000) {
       downloadSuccess = true;
-      console.log(`[Scrape] SoundCloud OK`);
     }
   } catch (err) {
-    console.log(`[Scrape] SoundCloud falló: ${err.message}`);
     if (fs.existsSync(rawFilePath)) {
-      try {
-        fs.unlinkSync(rawFilePath);
-      } catch (_) {}
+      try { fs.unlinkSync(rawFilePath); } catch (_) {}
     }
   }
 
-  // Intento 2: YouTube (Respaldo)
   if (!downloadSuccess) {
     try {
       sourceUsed = 'YouTube';
       await ytDlp(`ytsearch1:${searchQuery}`, dlpOptions);
       if (fs.existsSync(rawFilePath) && fs.statSync(rawFilePath).size > 10000) {
         downloadSuccess = true;
-        console.log(`[Scrape] YouTube OK`);
       }
     } catch (err) {
-      console.log(`[Scrape] YouTube falló: ${err.message}`);
       if (fs.existsSync(rawFilePath)) {
-        try {
-          fs.unlinkSync(rawFilePath);
-        } catch (_) {}
+        try { fs.unlinkSync(rawFilePath); } catch (_) {}
       }
       throw new Error(`Falló la descarga en SoundCloud y YouTube: ${err.message}`);
     }
@@ -670,12 +654,10 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
   }
 
   try {
-    // Normalización
     try {
       await normalizeAudio(rawFilePath, tempFilePath);
       if (fs.existsSync(rawFilePath)) fs.unlinkSync(rawFilePath);
     } catch (normErr) {
-      console.warn(`[Scrape] Normalización falló, usando archivo original: ${normErr.message}`);
       if (fs.existsSync(rawFilePath)) fs.renameSync(rawFilePath, tempFilePath);
     }
 
@@ -690,7 +672,7 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
     const title = reqTitle || parsed.title || searchQuery;
     const artist = reqArtist || parsed.artist || 'Unknown';
     const id = generateTrackId();
-    const songName = `\( {Date.now()}- \){slug(title)}.mp3`;
+    const songName = `${Date.now()}-${slug(title)}.mp3`;
 
     let coverBuffer = null;
     let coverName = null;
@@ -700,23 +682,15 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
       const downloaded = await downloadImage(coverInfo.url);
       if (downloaded) {
         coverBuffer = downloaded;
-        coverName = `\( {Date.now()}- \){slug(title || artist)}.${coverInfo.ext}`;
+        coverName = `${Date.now()}-${slug(title || artist)}.${coverInfo.ext}`;
       }
     }
 
-    embedID3Tags(tempFilePath, {
-      title,
-      artist,
-      album,
-      year,
-      imageBuffer: coverBuffer
-    });
+    embedID3Tags(tempFilePath, { title, artist, album, year, imageBuffer: coverBuffer });
 
     const lyricsData = await fetchLyrics(artist, title);
     const songBuffer = fs.readFileSync(tempFilePath);
-    try {
-      fs.unlinkSync(tempFilePath);
-    } catch (_) {}
+    try { fs.unlinkSync(tempFilePath); } catch (_) {}
 
     downloadedInLastInterval.push({ artist, title });
 
@@ -739,72 +713,41 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
       }
 
       const row = {
-        id,
-        title,
-        artist,
-        album,
-        year,
-        file_name: songName,
-        cover_file: coverName,
-        duration: durationSecs,
+        id, title, artist, album, year,
+        file_name: songName, cover_file: coverName, duration: durationSecs,
         file_url: publicStorageUrl('music', songName),
         cover_url: coverName ? publicStorageUrl('covers', coverName) : null,
-        plays: 0,
-        lyrics: lyricsData,
-        is_manual: Boolean(is_manual)
+        plays: 0, lyrics: lyricsData, is_manual: Boolean(is_manual)
       };
 
       const insertResult = await supabase.from('music_tracks').insert(row).select().single();
       if (insertResult.error) throw insertResult.error;
 
       await refreshCatalog();
-      return {
-        ok: true,
-        source: sourceUsed,
-        track: convertSupabaseTrack(insertResult.data),
-        total: catalog.length
-      };
+      return { ok: true, source: sourceUsed, track: convertSupabaseTrack(insertResult.data), total: catalog.length };
     }
 
-    // Almacenamiento local
     fs.writeFileSync(path.join(MUSIC_DIR, songName), songBuffer);
     if (coverBuffer && coverName) {
       fs.writeFileSync(path.join(COVERS_DIR, coverName), coverBuffer);
     }
 
     const track = {
-      id,
-      title,
-      artist,
-      album,
-      year,
-      fileName: songName,
-      file: localUrl('music', songName),
+      id, title, artist, album, year,
+      fileName: songName, file: localUrl('music', songName),
       cover: coverName ? localUrl('covers', coverName) : null,
-      coverFile: coverName,
-      duration: durationSecs,
-      plays: 0,
-      lyrics: lyricsData,
-      is_manual: Boolean(is_manual)
+      coverFile: coverName, duration: durationSecs, plays: 0,
+      lyrics: lyricsData, is_manual: Boolean(is_manual)
     };
 
     catalog.push(track);
     writeCatalog(catalog);
     updateFuseIndex(catalog);
 
-    console.log(`[Scrape] Guardado: ${artist} - \( {title} ( \){durationSecs}s) vía ${sourceUsed}`);
     return { ok: true, source: sourceUsed, track, total: catalog.length };
   } catch (err) {
-    if (fs.existsSync(tempFilePath)) {
-      try {
-        fs.unlinkSync(tempFilePath);
-      } catch (_) {}
-    }
-    if (fs.existsSync(rawFilePath)) {
-      try {
-        fs.unlinkSync(rawFilePath);
-      } catch (_) {}
-    }
+    if (fs.existsSync(tempFilePath)) { try { fs.unlinkSync(tempFilePath); } catch (_) {} }
+    if (fs.existsSync(rawFilePath)) { try { fs.unlinkSync(rawFilePath); } catch (_) {} }
     throw err;
   }
 }
@@ -815,11 +758,9 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year, is
 
 function addToQueueIfMissing(artist, title) {
   if (!artist || !title) return;
-
   const artistLower = artist.toLowerCase().trim();
   const titleLower = title.toLowerCase().trim();
 
-  // Más tolerante: solo rechaza si ambos coinciden de forma bastante cercana
   const exists = catalog.some(c => {
     const cArtist = (c.artist || '').toLowerCase();
     const cTitle = (c.title || '').toLowerCase();
@@ -830,7 +771,6 @@ function addToQueueIfMissing(artist, title) {
   });
 
   if (!exists) {
-    console.log(`[Auto] Añadiendo a cola: ${artist} - ${title}`);
     lowPriorityQueue.push({
       searchQuery: `${artist} ${title}`,
       reqArtist: artist,
@@ -946,8 +886,6 @@ app.get('/api/search', requireApiKey, async (req, res) => {
     return res.json({ source: 'catalog', data: matches });
   }
 
-  console.log(`[App Search] Petición prioritaria recibida: "${q}".`);
-
   const task = {
     searchQuery: q,
     reqArtist: '',
@@ -1055,34 +993,98 @@ app.get('/api/tracks/:id/lyrics', requireApiKey, async (req, res) => {
   res.status(404).json({ error: 'Letras no encontradas' });
 });
 
-app.post('/api/scrape', requireApiKey, (req, res, next) => {
-  const query = String(req.body.query || req.body.search || '').trim();
-  const reqArtist = String(req.body.artist || '').trim();
-  const reqTitle = String(req.body.title || '').trim();
-  const searchQuery = query || `${reqArtist} ${reqTitle}`.trim();
+app.post('/api/scrape', requireApiKey, upload.fields([{ name: 'song', maxCount: 1 }, { name: 'cover', maxCount: 1 }]), async (req, res, next) => {
+  try {
+    const isManual = req.body.is_manual === 'true' || req.files?.song;
+    
+    if (isManual && req.files?.song) {
+      const songFile = req.files.song[0];
+      const parsed = parseFilename(songFile.originalname);
+      const title = req.body.title || parsed.title;
+      const artist = req.body.artist || parsed.artist;
+      const album = req.body.album || '';
+      const year = req.body.year || '';
+      const id = generateTrackId();
+      const songName = `${Date.now()}-${slug(title)}.mp3`;
+      
+      let coverBuffer = req.files.cover ? req.files.cover[0].buffer : null;
+      let coverName = coverBuffer ? `${Date.now()}-${slug(title || artist)}.jpg` : null;
 
-  if (!searchQuery) {
-    return res.status(400).json({ error: 'Se requiere término de búsqueda' });
+      const tempPath = path.join(DATA_DIR, `manual-${Date.now()}.mp3`);
+      fs.writeFileSync(tempPath, songFile.buffer);
+      const durationSecs = Math.round(await getAudioDuration(tempPath));
+      embedID3Tags(tempPath, { title, artist, album, year, imageBuffer: coverBuffer });
+      const finalSongBuffer = fs.readFileSync(tempPath);
+      try { fs.unlinkSync(tempPath); } catch (_) {}
+
+      const lyricsData = await fetchLyrics(artist, title);
+
+      if (useSupabase) {
+        const songPath = `music/${songName}`;
+        await supabase.storage.from(SUPABASE_BUCKET).upload(songPath, finalSongBuffer, { contentType: 'audio/mpeg' });
+        if (coverBuffer && coverName) {
+          await supabase.storage.from(SUPABASE_BUCKET).upload(`covers/${coverName}`, coverBuffer, { contentType: 'image/jpeg' });
+        }
+        const row = {
+          id, title, artist, album, year,
+          file_name: songName, cover_file: coverName, duration: durationSecs,
+          file_url: publicStorageUrl('music', songName),
+          cover_url: coverName ? publicStorageUrl('covers', coverName) : null,
+          plays: 0, lyrics: lyricsData, is_manual: true
+        };
+        const insertResult = await supabase.from('music_tracks').insert(row).select().single();
+        await refreshCatalog();
+        return res.status(201).json({ ok: true, track: convertSupabaseTrack(insertResult.data) });
+      }
+
+      fs.writeFileSync(path.join(MUSIC_DIR, songName), finalSongBuffer);
+      if (coverBuffer && coverName) {
+        fs.writeFileSync(path.join(COVERS_DIR, coverName), coverBuffer);
+      }
+
+      const track = {
+        id, title, artist, album, year,
+        fileName: songName, file: localUrl('music', songName),
+        cover: coverName ? localUrl('covers', coverName) : null,
+        coverFile: coverName, duration: durationSecs, plays: 0,
+        lyrics: lyricsData, is_manual: true
+      };
+
+      catalog.push(track);
+      writeCatalog(catalog);
+      updateFuseIndex(catalog);
+      return res.status(201).json({ ok: true, track, total: catalog.length });
+    }
+
+    const query = String(req.body.query || req.body.search || '').trim();
+    const reqArtist = String(req.body.artist || '').trim();
+    const reqTitle = String(req.body.title || '').trim();
+    const searchQuery = query || `${reqArtist} ${reqTitle}`.trim();
+
+    if (!searchQuery) {
+      return res.status(400).json({ error: 'Se requiere término de búsqueda' });
+    }
+
+    const task = {
+      searchQuery, reqArtist, reqTitle,
+      album: String(req.body.album || '').trim(),
+      year: String(req.body.year || '').trim(),
+      is_manual: false
+    };
+
+    const downloadPromise = new Promise((resolve, reject) => {
+      task.resolve = resolve;
+      task.reject = reject;
+    });
+
+    highPriorityQueue.push(task);
+    processQueue();
+
+    const result = await downloadPromise;
+    res.status(201).json(result);
+  } catch (err) {
+    next(err);
   }
-
-  const task = {
-    searchQuery,
-    reqArtist,
-    reqTitle,
-    album: String(req.body.album || '').trim(),
-    year: String(req.body.year || '').trim(),
-    is_manual: Boolean(req.body.is_manual)
-  };
-
-  const downloadPromise = new Promise((resolve, reject) => {
-    task.resolve = resolve;
-    task.reject = reject;
-  });
-
-  highPriorityQueue.push(task);
-  processQueue();
-
-  downloadPromise.then(result => res.status(201).json(result)).catch(err => next(err));
 });
 
 app.delete('/api/tracks/:id', requireApiKey, async (req, res, next) => {
@@ -1093,16 +1095,24 @@ app.delete('/api/tracks/:id', requireApiKey, async (req, res, next) => {
     if (useSupabase) {
       await supabase.storage
         .from(SUPABASE_BUCKET)
-        .remove([`music/\( {track.fileName}`, ...(track.coverFile ? [`covers/ \){track.coverFile}`] : [])]);
+        .remove([`music/${track.fileName}`, ...(track.coverFile ? [`covers/${track.coverFile}`] : [])]);
       await supabase.from('music_tracks').delete().eq('id', track.id);
       await refreshCatalog();
       return res.json({ ok: true, total: catalog.length });
     }
 
     const index = catalog.findIndex(item => String(item.id) === String(req.params.id));
-    catalog.splice(index, 1);
-    writeCatalog(catalog);
-    updateFuseIndex(catalog);
+    if (index !== -1) {
+      const musicPath = path.join(MUSIC_DIR, catalog[index].fileName);
+      if (fs.existsSync(musicPath)) fs.unlinkSync(musicPath);
+      if (catalog[index].coverFile) {
+        const coverPath = path.join(COVERS_DIR, catalog[index].coverFile);
+        if (fs.existsSync(coverPath)) fs.unlinkSync(coverPath);
+      }
+      catalog.splice(index, 1);
+      writeCatalog(catalog);
+      updateFuseIndex(catalog);
+    }
     return res.json({ ok: true, total: catalog.length });
   } catch (error) {
     next(error);
@@ -1131,12 +1141,10 @@ app.use((error, _req, res, _next) => {
 function startKeepAlive() {
   const host = process.env.RENDER_EXTERNAL_URL || process.env.RENDER_EXTERNAL_HOSTNAME;
   if (!host) return;
-  const pingUrl = host.startsWith('http') ? `\( {host}/health` : `https:// \){host}/health`;
+  const pingUrl = host.startsWith('http') ? `${host}/health` : `https://${host}/health`;
 
   setInterval(async () => {
-    try {
-      await fetch(pingUrl);
-    } catch (_) {}
+    try { await fetch(pingUrl); } catch (_) {}
   }, 14 * 60 * 1000);
 }
 
@@ -1149,3 +1157,4 @@ app.listen(PORT, async () => {
   startKeepAlive();
   autoScrapeTrendsAndArtists();
 });
+
