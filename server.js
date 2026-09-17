@@ -7,7 +7,7 @@
  *  - Fix WebSocket (ws) para Node 20
  *  - Keep-alive cada 14 minutos
  *  - Búsqueda automática de covers (iTunes)
- *  - Módulo de Scraping y Descarga de Música (@distube/yt-dlp-exec)
+ *  - Módulo de Scraping y Descarga de Música (youtube-dl-exec)
  *  - Mejor logging y validaciones
  * ============================================================
  */
@@ -20,7 +20,7 @@ const multer = require('multer');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const ws = require('ws');
-const ytDlp = require('@distube/yt-dlp-exec');
+const ytDlp = require('youtube-dl-exec');
 
 // ============================================================
 // CONFIGURACIÓN BÁSICA
@@ -1053,3 +1053,4 @@ app.listen(PORT, () => {
 
   startKeepAlive();
 });
+
