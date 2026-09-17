@@ -1,34 +1,562 @@
-<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sekai Music Server</title><style>
-*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,sans-serif;background:#0b0d12;color:#f5f7fb}main{max-width:900px;margin:auto;padding:28px 18px}.card{background:#121620;border:1px solid #242a38;border-radius:22px;padding:22px;margin-bottom:18px;box-shadow:0 12px 40px #0004}h1{margin:0 0 6px;font-size:28px}.muted{color:#9da6b8}label{display:block;margin:14px 0 7px;font-size:13px;color:#b8c0d0}input{width:100%;padding:13px 14px;border-radius:12px;border:1px solid #303747;background:#0d1119;color:white}button{border:0;border-radius:13px;padding:13px 18px;background:#fff;color:#111;font-weight:700;cursor:pointer;margin-top:16px}.drop{border:1px dashed #59657b;padding:24px;border-radius:16px;text-align:center}.row{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media(max-width:650px){.row{grid-template-columns:1fr}}.track{display:flex;gap:14px;align-items:center;padding:12px 0;border-bottom:1px solid #252b38}.cover{width:54px;height:54px;object-fit:cover;border-radius:10px;background:#202633}.track b{display:block}.track span{color:#8f99ab;font-size:13px}#status{margin-top:12px;color:#aeb8c9}.danger{background:#272d3a;color:#fff;margin:0;padding:8px 11px;font-size:12px}
-</style><!-- API_KEY_INJECT --></head><body><main>
-<div class="card"><h1>🎵 Sekai Music Server</h1><p class="muted">Sube canciones desde aquí. Sekai consultará este servidor mediante <code>/api/catalog</code>.</p><div id="count" class="muted">Cargando catálogo...</div></div>
-<div class="card"><h2>Subir canción</h2><form id="form"><div class="drop"><input id="song" name="song" type="file" accept="audio/*" required></div><div class="row"><div><label>Título</label><input name="title" placeholder="Se detecta del nombre si lo dejas vacío"></div><div><label>Artista</label><input name="artist" placeholder="Artista"></div></div><div class="row"><div><label>Álbum</label><input name="album" placeholder="Opcional"></div><div><label>Año</label><input name="year" placeholder="Opcional"></div></div><label>Cover</label><input name="cover" type="file" accept="image/jpeg,image/png,image/webp"><button type="submit">Subir canción</button><div id="status"></div></form></div>
-<div class="card"><h2>Catálogo</h2><div id="list"></div></div><div class="card"><h2>🔑 API para otras apps</h2><p class="muted">Sekai Server genera automáticamente una API Key segura para este servidor. Copia la clave y pega los ejemplos directamente en tu app o página web.</p><label>Tu API Key</label><div class="row"><input id="apiKey" readonly value="Cargando clave..."><button type="button" id="copyKey">Copiar API Key</button></div><p class="muted">Esta es una única clave para el usuario autorizado. No la publiques ni la compartas.</p><h3>Endpoints</h3><pre id="endpoints" style="white-space:pre-wrap;background:#0d1119;padding:14px;border-radius:12px;overflow:auto"></pre><h3>Ejemplo JavaScript listo para copiar</h3><pre id="jsExample" style="white-space:pre-wrap;background:#0d1119;padding:14px;border-radius:12px;overflow:auto"></pre><button type="button" id="copyExample">Copiar ejemplo</button><p class="muted">La clave se genera y guarda automáticamente en el servidor. Si la borras del almacenamiento del servidor, se generará otra.</p></div>
-<script>
-const $=s=>document.querySelector(s);
-const API_KEY=String(window.SEKAI_API_KEY||'').trim();
-const authHeaders=()=>API_KEY?{'x-api-key':API_KEY}:{};
-const authUrl=(url)=>API_KEY?url+(url.includes('?')?'&':'?')+'api_key='+encodeURIComponent(API_KEY):url;
-function esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-async function load(){const r=await fetch('/api/catalog',{headers:authHeaders()});const j=await r.json();if(!r.ok){$('#count').textContent=j.error||'No autorizado';return}$('#count').textContent=j.total+' canción(es)';$('#list').innerHTML=j.data.map(t=>`<div class="track"><img class="cover" src="${t.cover||''}" onerror="this.style.visibility='hidden'"><div style="flex:1"><b>${esc(t.title)}</b><span>${esc(t.artist)}${t.album?' · '+esc(t.album):''}</span></div><button class="danger" onclick="del('${t.id}')">Eliminar</button></div>`).join('')||'<p class="muted">Todavía no hay canciones.</p>'}
-$('#form').onsubmit=async e=>{e.preventDefault();$('#status').textContent='Subiendo...';const r=await fetch('/api/upload',{method:'POST',headers:authHeaders(),body:new FormData(e.target)});const j=await r.json();$('#status').textContent=r.ok?'✓ Canción guardada en el servidor':'✕ '+(j.error||'Error');if(r.ok){e.target.reset();load()}};
-async function del(id){if(!confirm('¿Eliminar esta canción?'))return;await fetch('/api/tracks/'+encodeURIComponent(id),{method:'DELETE',headers:authHeaders()});load()}
-const base=location.origin;
-$('#apiKey').value=API_KEY||'No disponible: vuelve a desplegar el servidor';
-$('#endpoints').textContent=`GET ${base}/api/catalog
-GET ${base}/catalog.json
-GET ${base}/api/lyrics?artist=ARTISTA&title=CANCION
-GET ${authUrl(base+'/music/ARCHIVO.mp3')}
-GET ${authUrl(base+'/covers/PORTADA.jpg')}`;
-$('#jsExample').textContent=`const API_KEY = ${JSON.stringify(API_KEY)};
-const API_URL = ${JSON.stringify(base)};
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sekai Music Engine - Console</title>
+  <style>
+    :root {
+      --bg: #07090e;
+      --card-bg: #0f131d;
+      --card-border: #1e2638;
+      --accent: #6366f1;
+      --accent-hover: #4f46e5;
+      --accent-glow: rgba(99, 102, 241, 0.25);
+      --danger: #ef4444;
+      --text: #f1f5f9;
+      --text-muted: #808ea8;
+      --input-bg: #0a0d14;
+    }
 
-fetch(API_URL + '/api/catalog', {
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* HEADER & NAV */
+    header {
+      background: rgba(15, 19, 29, 0.8);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--card-border);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .nav-container {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 24px;
+      height: 70px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      background: linear-gradient(135deg, #fff 0%, #a5b4fc 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .brand svg { fill: var(--accent); }
+
+    .nav-tabs {
+      display: flex;
+      gap: 8px;
+    }
+
+    .tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 10px 16px;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s ease;
+    }
+
+    .tab-btn:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .tab-btn.active {
+      color: #fff;
+      background: var(--card-border);
+      box-shadow: 0 0 15px var(--accent-glow);
+    }
+
+    /* MAIN CONTAINER */
+    main {
+      max-width: 1200px;
+      margin: 32px auto;
+      padding: 0 24px;
+      flex: 1;
+      width: 100%;
+    }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; animation: fadeIn 0.3s ease; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* CARDS & UI COMPONENTS */
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 24px;
+      box-shadow: 0 20px 40px -15px rgba(0,0,0,0.5);
+    }
+
+    .card-title {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .muted { color: var(--text-muted); font-size: 14px; line-height: 1.5; }
+
+    /* SEARCH & GRID */
+    .search-bar {
+      width: 100%;
+      padding: 14px 18px;
+      background: var(--input-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      color: #fff;
+      font-size: 15px;
+      margin-bottom: 24px;
+      outline: none;
+      transition: border 0.2s;
+    }
+    .search-bar:focus { border-color: var(--accent); }
+
+    .catalog-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 20px;
+    }
+
+    .track-card {
+      background: var(--input-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 14px;
+      transition: transform 0.2s, border-color 0.2s;
+      position: relative;
+    }
+    .track-card:hover {
+      transform: translateY(-4px);
+      border-color: #3b82f6;
+    }
+
+    .cover-wrapper {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1;
+      border-radius: 10px;
+      overflow: hidden;
+      margin-bottom: 12px;
+      background: #181d2a;
+    }
+
+    .cover-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .track-title { font-weight: 700; font-size: 15px; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .track-artist { color: var(--text-muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* FORM & INPUTS */
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    @media (max-width: 768px) { .form-grid { grid-template-columns: 1fr; } }
+
+    label { display: block; font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; }
+    input, textarea {
+      width: 100%;
+      padding: 12px 14px;
+      background: var(--input-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      color: #fff;
+      font-size: 14px;
+      outline: none;
+    }
+    input:focus, textarea:focus { border-color: var(--accent); }
+
+    .btn {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 12px 20px;
+      border-radius: 10px;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: background 0.2s, box-shadow 0.2s;
+    }
+    .btn:hover { background: var(--accent-hover); box-shadow: 0 0 15px var(--accent-glow); }
+    .btn-danger { background: #331215; color: var(--danger); border: 1px solid #7f1d1d; }
+    .btn-danger:hover { background: var(--danger); color: #fff; }
+
+    /* CODE BLOCKS */
+    pre {
+      background: var(--input-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 16px;
+      overflow-x: auto;
+      font-family: 'Fira Code', monospace;
+      font-size: 13px;
+      color: #38bdf8;
+      margin-top: 10px;
+    }
+
+    /* LOGS DASHBOARD */
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      background: rgba(34, 197, 94, 0.1);
+      color: #4ade80;
+    }
+
+    .log-box {
+      background: #05070a;
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 16px;
+      height: 250px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 13px;
+      color: #a7f3d0;
+    }
+  </style>
+  <!-- API_KEY_INJECT -->
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header>
+    <div class="nav-container">
+      <div class="brand">
+        <svg width="28" height="28" viewBox="0 0 24 24"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+        <span>Sekai Engine</span>
+      </div>
+      <nav class="nav-tabs">
+        <button class="tab-btn active" onclick="switchTab('catalog')">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+          Catálogo
+        </button>
+        <button class="tab-btn" onclick="switchTab('api')">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+          API & Docs
+        </button>
+        <button class="tab-btn" onclick="switchTab('admin')">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+          Admin & Logs
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <!-- CONTENT CONTAINER -->
+  <main>
+
+    <!-- TAB 1: CATÁLOGO DE CANCIONES -->
+    <div id="tab-catalog" class="tab-content active">
+      <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <div>
+            <h1 style="font-size: 24px; font-weight: 800;">Explorar Biblioteca</h1>
+            <p class="muted">Lista en tiempo real de todas las canciones indexadas en el servidor.</p>
+          </div>
+          <span class="status-badge" id="totalTracksBadge">Cargando...</span>
+        </div>
+        <input type="text" id="searchInput" class="search-bar" placeholder="🔍 Buscar por título, artista o álbum..." oninput="filterCatalog()">
+        <div class="catalog-grid" id="catalogGrid"></div>
+      </div>
+    </div>
+
+    <!-- TAB 2: DOCUMENTACIÓN DE API -->
+    <div id="tab-api" class="tab-content">
+      <div class="card">
+        <h2 class="card-title">🔑 Autenticación & Claves de Acceso</h2>
+        <p class="muted">Esta es tu clave maestra generada automáticamente para comunicarse con las APIs del servidor.</p>
+        <div style="margin-top: 16px;">
+          <label>X-API-KEY</label>
+          <div style="display: flex; gap: 10px;">
+            <input id="apiKeyDisplay" readonly value="Cargando...">
+            <button class="btn" onclick="copyApiKey()">Copiar Clave</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title">🚀 Endpoints del Servidor</h2>
+        <p class="muted">Servicios REST disponibles para consumir desde clientes móviles o la Web App de Sekai.</p>
+        
+        <label style="margin-top: 14px;">Catálogo Completo</label>
+        <pre>GET /api/catalog?api_key=TU_API_KEY</pre>
+
+        <label style="margin-top: 14px;">Búsqueda Inteligente / Descarga en Vivo</label>
+        <pre>GET /api/search?q=Nombre+De+Cancion&api_key=TU_API_KEY</pre>
+
+        <label style="margin-top: 14px;">Obtener Letras (LRCLIB Integration)</label>
+        <pre>GET /api/tracks/:id/lyrics?api_key=TU_API_KEY</pre>
+
+        <h2 class="card-title" style="margin-top: 24px;">💻 Ejemplo en JavaScript (Fetch API)</h2>
+        <pre id="jsExampleCode"></pre>
+      </div>
+    </div>
+
+    <!-- TAB 3: SECCIÓN SECRETA ADMIN / LOGS / SUBIDA -->
+    <div id="tab-admin" class="tab-content">
+      <!-- BLOQUEO POR PIN -->
+      <div id="adminLockScreen" class="card" style="text-align: center; padding: 40px;">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-bottom: 12px; color: var(--accent);"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+        <h2 style="margin-bottom: 8px;">Área Restringida</h2>
+        <p class="muted" style="margin-bottom: 20px;">Ingresa la clave de acceso del administrador para continuar.</p>
+        <div style="max-width: 300px; margin: 0 auto; display: flex; gap: 8px;">
+          <input type="password" id="adminPin" placeholder="PIN de acceso">
+          <button class="btn" onclick="unlockAdmin()">Entrar</button>
+        </div>
+      </div>
+
+      <!-- PANEL ADMIN DESBLOQUEADO -->
+      <div id="adminPanel" style="display: none;">
+        
+        <!-- MONITOR DE ESTADO Y LOGS -->
+        <div class="card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h2 class="card-title">📡 Monitor de Procesos & Colas</h2>
+            <button class="btn btn-danger" onclick="triggerClean()">🧹 Ejecutar Limpieza Masiva</button>
+          </div>
+          <div class="form-grid" style="margin-bottom: 16px;">
+            <div style="background: var(--input-bg); padding: 14px; border-radius: 10px; border: 1px solid var(--card-border);">
+              <span class="muted">Cola Alta Prioridad (App)</span>
+              <h3 id="highQueueCount" style="font-size: 24px; color: #60a5fa;">0</h3>
+            </div>
+            <div style="background: var(--input-bg); padding: 14px; border-radius: 10px; border: 1px solid var(--card-border);">
+              <span class="muted">Cola Baja Prioridad (Scraper)</span>
+              <h3 id="lowQueueCount" style="font-size: 24px; color: #a78bfa;">0</h3>
+            </div>
+          </div>
+          <label>Consola del Servidor en Vivo</label>
+          <div class="log-box" id="logTerminal">
+            [System] Consola lista. Monitoreando descargas e hilos de yt-dlp...
+          </div>
+        </div>
+
+        <!-- FORMULARIO DE SUBIDA MANUAL (CON COVERS ANIMADOS Y LYRICS) -->
+        <div class="card">
+          <h2 class="card-title">➕ Agregar Canción Manualmente</h2>
+          <form id="uploadForm">
+            <div style="margin-bottom: 16px;">
+              <label>Archivo de Audio (MP3 / FLAC / WAV)</label>
+              <input type="file" name="song" accept="audio/*" required>
+            </div>
+            
+            <div class="form-grid">
+              <div>
+                <label>Título</label>
+                <input name="title" placeholder="Título de la pista">
+              </div>
+              <div>
+                <label>Artista</label>
+                <input name="artist" placeholder="Nombre del artista">
+              </div>
+            </div>
+
+            <div class="form-grid">
+              <div>
+                <label>Álbum</label>
+                <input name="album" placeholder="Opcional">
+              </div>
+              <div>
+                <label>Año</label>
+                <input name="year" placeholder="Opcional">
+              </div>
+            </div>
+
+            <div style="margin-bottom: 16px;">
+              <label>Portada o Cover Animado (JPG, PNG, WEBP o GIF Animado)</label>
+              <input type="file" name="cover" accept="image/jpeg,image/png,image/webp,image/gif">
+            </div>
+
+            <button type="submit" class="btn">Subir e Indexar Pista</button>
+            <span id="uploadStatus" style="margin-left: 12px;" class="muted"></span>
+          </form>
+        </div>
+
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    const API_KEY = String(window.SEKAI_API_KEY || '').trim();
+    let fullCatalog = [];
+
+    const headers = () => API_KEY ? { 'x-api-key': API_KEY } : {};
+
+    function switchTab(tabName) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+      event.currentTarget.classList.add('active');
+      document.getElementById(`tab-${tabName}`).classList.add('active');
+    }
+
+    async function loadCatalog() {
+      try {
+        const res = await fetch('/api/catalog', { headers: headers() });
+        const json = await res.json();
+        if (!res.ok) return;
+
+        fullCatalog = json.data || [];
+        document.getElementById('totalTracksBadge').textContent = `${fullCatalog.length} Canciones`;
+        renderCatalog(fullCatalog);
+      } catch (err) {
+        console.error('Error al cargar catálogo:', err);
+      }
+    }
+
+    function renderCatalog(items) {
+      const grid = document.getElementById('catalogGrid');
+      if (items.length === 0) {
+        grid.innerHTML = `<p class="muted">No se encontraron canciones en el servidor.</p>`;
+        return;
+      }
+
+      grid.innerHTML = items.map(track => `
+        <div class="track-card">
+          <div class="cover-wrapper">
+            <img class="cover-img" src="${track.cover || 'https://via.placeholder.com/300/121620/808ea8?text=Sekai'}" alt="Cover" onerror="this.src='https://via.placeholder.com/300/121620/808ea8?text=No+Cover'">
+          </div>
+          <div class="track-title">${esc(track.title)}</div>
+          <div class="track-artist">${esc(track.artist)}</div>
+          ${document.getElementById('adminPanel').style.display !== 'none' ? `
+            <button class="btn btn-danger" style="width: 100%; margin-top: 10px; padding: 6px;" onclick="deleteTrack('${track.id}')">Eliminar</button>
+          ` : ''}
+        </div>
+      `).join('');
+    }
+
+    function filterCatalog() {
+      const q = document.getElementById('searchInput').value.toLowerCase();
+      const filtered = fullCatalog.filter(t => 
+        t.title.toLowerCase().includes(q) || 
+        t.artist.toLowerCase().includes(q)
+      );
+      renderCatalog(filtered);
+    }
+
+    function esc(s) {
+      return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    function unlockAdmin() {
+      const pin = document.getElementById('adminPin').value;
+      if (pin === '1234' || pin === API_KEY.slice(0, 4)) {
+        document.getElementById('adminLockScreen').style.display = 'none';
+        document.getElementById('adminPanel').style.display = 'block';
+        startLogsMonitor();
+        renderCatalog(fullCatalog);
+      } else {
+        alert('PIN Incorrecto');
+      }
+    }
+
+    async function startLogsMonitor() {
+      setInterval(async () => {
+        try {
+          const res = await fetch('/health');
+          const data = await res.json();
+          document.getElementById('highQueueCount').textContent = data.highQueueSize || 0;
+          document.getElementById('lowQueueCount').textContent = data.lowQueueSize || 0;
+        } catch (_) {}
+      }, 3000);
+    }
+
+    async function triggerClean() {
+      if (!confirm('¿Deseas ejecutar el limpiador para borrar duplicados y canciones corruptas?')) return;
+      const res = await fetch('/api/clean', { method: 'POST', headers: headers() });
+      const json = await res.json();
+      alert(`Limpieza completada. Se eliminaron ${json.removedTracks} pistas.`);
+      loadCatalog();
+    }
+
+    async function deleteTrack(id) {
+      if (!confirm('¿Eliminar esta canción permanentemente?')) return;
+      await fetch(`/api/tracks/${encodeURIComponent(id)}`, { method: 'DELETE', headers: headers() });
+      loadCatalog();
+    }
+
+    document.getElementById('uploadForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const status = document.getElementById('uploadStatus');
+      status.textContent = 'Subiendo...';
+      const formData = new FormData(e.target);
+      formData.append('is_manual', 'true');
+
+      const res = await fetch('/api/scrape', { method: 'POST', headers: headers(), body: formData });
+      if (res.ok) {
+        status.textContent = '✓ Guardado exitosamente';
+        e.target.reset();
+        loadCatalog();
+      } else {
+        status.textContent = '✕ Error al subir';
+      }
+    };
+
+    function copyApiKey() {
+      navigator.clipboard.writeText(API_KEY);
+      alert('API Key copiada al portapapeles');
+    }
+
+    // Inicialización
+    document.getElementById('apiKeyDisplay').value = API_KEY || 'No configurada';
+    document.getElementById('jsExampleCode').textContent = 
+`const API_KEY = "${API_KEY}";
+const SERVER_URL = "${location.origin}";
+
+fetch(\`\${SERVER_URL}/api/catalog\`, {
   headers: { 'x-api-key': API_KEY }
 })
-  .then(response => response.json())
+  .then(res => res.json())
   .then(data => console.log(data.data));`;
-$('#copyKey').onclick=()=>navigator.clipboard?.writeText(API_KEY);
-$('#copyExample').onclick=()=>navigator.clipboard?.writeText($('#jsExample').textContent);
-load();
-</script></main></body></html>
+
+    loadCatalog();
+  </script>
+</body>
+</html>
