@@ -12,7 +12,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "node --check server.js"
+    "test": "node --check server.js",
+    "update-ytdlp": "npx youtube-dl-exec -U"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.0",
@@ -25,7 +26,7 @@
     "node-id3": "^0.2.6",
     "nodemailer": "^6.9.15",
     "ws": "^8.18.0",
-    "youtube-dl-exec": "^3.0.12"
+    "youtube-dl-exec": "^3.0.22"
   },
   "keywords": [
     "sekai",
