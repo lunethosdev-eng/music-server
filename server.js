@@ -1,17 +1,17 @@
 /**
  * ============================================================
- *  SEKAI MUSIC SERVER - Versión Profesional / Enterprise
- *  - Soporte Supabase + Almacenamiento Local
- *  - Fallback Inteligente SoundCloud -> YouTube (Invidious)
- *  - Cola con Doble Prioridad (Alta: App Search / Baja: AutoScraper)
- *  - Filtro estricto <= 60s + Etiquetado ID3 (.mp3)
- *  - Búsqueda Tolerante a Errores (Fuzzy Search con Fuse.js)
- *  - Integración de Letras de Canciones (LRCLIB API)
- *  - Normalización de Audio y Conversión mediante FFmpeg
- *  - Paginación, Filtros y Ordenamiento en /api/catalog
- *  - Cobertura de Covers Animados (GIF / Apple Music)
- *  - Limpieza Automática de Duplicados (Protegiendo is_manual: true)
- *  - Métrica de Reproducciones y Dashboard de Control
+ * SEKAI MUSIC SERVER - Versión Profesional / Enterprise
+ * - Soporte Supabase + Almacenamiento Local
+ * - Fallback Inteligente SoundCloud -> YouTube (Invidious)
+ * - Cola con Doble Prioridad (Alta: App Search / Baja: AutoScraper)
+ * - Filtro estricto <= 60s + Etiquetado ID3 (.mp3)
+ * - Búsqueda Tolerante a Errores (Fuzzy Search con Fuse.js)
+ * - Integración de Letras de Canciones (LRCLIB API)
+ * - Normalización de Audio y Conversión mediante FFmpeg
+ * - Paginación, Filtros y Ordenamiento en /api/catalog
+ * - Cobertura de Covers Animados (GIF / Apple Music)
+ * - Limpieza Automática de Duplicados (Protegiendo is_manual: true)
+ * - Métrica de Reproducciones y Dashboard de Control
  * ============================================================
  */
 
@@ -985,7 +985,7 @@ app.delete('/api/tracks/:id', requireApiKey, async (req, res, next) => {
 app.get('/', (_req, res) => {
   try {
     const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-    res.type('html').send(html.replace('<!-- API_KEY_INJECT -->', `<script>window.SEKAI_API_KEY=${JSON.stringify(API_KEY)};</script>`));
+    res.type('html').send(html.replace('', `<script>window.SEKAI_API_KEY=${JSON.stringify(API_KEY)};</script>`));
   } catch (err) {
     res.status(500).send('Error cargando index.html');
   }
