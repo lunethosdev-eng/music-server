@@ -1,10 +1,12 @@
 /**
  * ============================================================
  *  SEKAI MUSIC SERVER
- *  Versión completa con Notificación por Correo al Finalizar
+ *  Versión completa con Notificaciones por Correo + Auto-Scraper
  *  - Soporte Supabase + Local
- *  - Cola de descarga asíncrona y controlada (Modo Lento)
- *  - Notificación automática por Email a lunethos.dev@gmail.com
+ *  - Descarga bajo demanda en tiempo real desde Apps (/api/search)
+ *  - Auto-descarga de Artistas Famosos (2023-2026) y Tendencias
+ *  - Reporte acumulativo por Correo cada 10 minutos
+ *  - Notificación automática por Email al finalizar la cola
  * ============================================================
  */
 
@@ -35,12 +37,33 @@ const API_KEY_FILE = path.join(DATA_DIR, 'api-key.json');
 // Configuración del correo destino
 const NOTIFICATION_EMAIL = 'lunethos.dev@gmail.com';
 
-// Transportador de correo (Configura tus credenciales SMTP en Render)
+// Arreglo para acumular descargas y enviar reporte cada 10 minutos
+let downloadedInLastInterval = [];
+
+// Artistas semilla iniciales
+const SEED_ARTISTS = [
+  'Grupo Frontera',
+  'Laufey',
+  'Her\'s',
+  'Depresión Sonora',
+  'Bad Bunny',
+  'Peso Pluma',
+  'YOASOBI',
+  'Ado',
+  'Taylor Swift',
+  'Billie Eilish',
+  'Feid',
+  'Karol G'
+];
+
+const SEED_GENRES = ['regional mexicano', 'indie rock', 'city pop', 'latin pop', 'post punk'];
+
+// Transportador de correo
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: process.env.EMAIL_USER, // Tu correo Gmail desde variables de entorno
-    pass: process.env.EMAIL_PASS  // Tu contraseña de aplicación de Google
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
   }
 });
 
@@ -56,23 +79,58 @@ async function sendCompletionEmail(totalTracks) {
     subject: '🎉 ¡Proceso de Descarga Finalizado!',
     html: `
       <h2>¡Hola!</h2>
-      <p>El servidor de música <strong>Sekai</strong> ha procesado y descargado todas las canciones solicitadas.</p>
+      <p>El servidor de música <strong>Sekai</strong> ha completado la cola de descargas automáticas.</p>
       <ul>
-        <li><strong>Estado:</strong> Completado</li>
+        <li><strong>Estado:</strong> Completado / Cola Vacía</li>
         <li><strong>Total de canciones en el catálogo:</strong> ${totalTracks}</li>
         <li><strong>Fecha/Hora:</strong> ${new Date().toLocaleString('es-ES')}</li>
       </ul>
-      <p>Todas las canciones ya están disponibles en tu base de datos y lista de reproducción.</p>
+      <p>Todas las canciones ya están disponibles en tu catálogo y base de datos.</p>
     `
   };
 
   try {
     await transporter.sendMail(mailOptions);
-    console.log(`[Email] Correo de notificación enviado exitosamente a ${NOTIFICATION_EMAIL}`);
+    console.log(`[Email] Correo de notificación enviado a ${NOTIFICATION_EMAIL}`);
   } catch (err) {
-    console.error('[Email] Error enviando correo de notificación:', err.message);
+    console.error('[Email] Error enviando correo de finalización:', err.message);
   }
 }
+
+// Función para enviar el reporte de canciones descargadas cada 10 minutos
+async function sendIntervalReportEmail() {
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) return;
+  if (downloadedInLastInterval.length === 0) return;
+
+  const currentList = [...downloadedInLastInterval];
+  downloadedInLastInterval = []; // Limpiar lista para los siguientes 10 min
+
+  const listHtml = currentList.map(t => `<li><strong>${t.artist}</strong> - ${t.title}</li>`).join('');
+
+  const mailOptions = {
+    from: `"Sekai Music Server" <${process.env.EMAIL_USER}>`,
+    to: NOTIFICATION_EMAIL,
+    subject: `📥 Reporte: ${currentList.length} canciones descargadas en los últimos 10 min`,
+    html: `
+      <h2>Avance de Descargas (Últimos 10 Minutos)</h2>
+      <p>Se han descargado y procesado con éxito las siguientes <strong>${currentList.length}</strong> canciones:</p>
+      <ul>
+        ${listHtml}
+      </ul>
+      <p><em>Servidor activo en progreso...</em></p>
+    `
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    console.log(`[Email] Reporte de 10 minutos enviado con ${currentList.length} canciones.`);
+  } catch (err) {
+    console.error('[Email] Error enviando reporte periódico:', err.message);
+  }
+}
+
+// Iniciar temporizador del reporte cada 10 minutos (600,000 ms)
+setInterval(sendIntervalReportEmail, 10 * 60 * 1000);
 
 // ============================================================
 // SUPABASE
@@ -234,10 +292,6 @@ function generateTrackId() {
   return `sekai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function generateFileName(originalName) {
-  return `${Date.now()}-${cleanName(originalName)}`;
-}
-
 // ============================================================
 // CATÁLOGO LOCAL Y SUPABASE
 // ============================================================
@@ -360,15 +414,15 @@ let activeProcess = false;
 
 function checkQueueCompletion() {
   if (downloadQueue.length === 0 && !isDownloading && activeProcess) {
-    console.log('[Queue] La cola está vacía. Esperando confirmación de finalización...');
+    console.log('[Queue] La cola está vacía. Esperando confirmación...');
     clearTimeout(completionTimer);
     
-    // Espera 3 minutos por si se envían nuevas descargas
     completionTimer = setTimeout(async () => {
       if (downloadQueue.length === 0 && !isDownloading && activeProcess) {
         activeProcess = false;
-        console.log('[Queue] Todas las descargas han concluido oficialmente.');
+        console.log('[Queue] Proceso concluido. Enviando correo final...');
         await refreshCatalog();
+        await sendIntervalReportEmail(); // Enviar remanente de descargas
         await sendCompletionEmail(catalog.length);
       }
     }, 3 * 60 * 1000);
@@ -390,12 +444,12 @@ async function processQueue() {
   try {
     console.log(`[Queue] Descargando: "${task.searchQuery}" (${downloadQueue.length} restantes)`);
     const result = await executeScrape(task);
-    task.resolve(result);
+    if (task.resolve) task.resolve(result);
   } catch (err) {
-    task.reject(err);
+    if (task.reject) task.reject(err);
   } finally {
     isDownloading = false;
-    setTimeout(processQueue, 2000);
+    setTimeout(processQueue, 2500); // Pausa recomendada para Render
   }
 }
 
@@ -441,6 +495,9 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year }) 
       }
     }
 
+    // Registrar descarga para el reporte de 10 min
+    downloadedInLastInterval.push({ artist, title });
+
     if (useSupabase) {
       const songPath = `music/${songName}`;
       let uploadResult = await supabase.storage.from(SUPABASE_BUCKET).upload(songPath, songBuffer, { contentType: 'audio/mpeg', upsert: false });
@@ -483,6 +540,74 @@ async function executeScrape({ searchQuery, reqArtist, reqTitle, album, year }) 
 }
 
 // ============================================================
+// AUTO-SCRAPE: TENDENCIAS, ARTISTAS (2023-2026) Y GÉNEROS
+// ============================================================
+
+function addToQueueIfMissing(artist, title) {
+  const exists = catalog.some(c => 
+    c.title.toLowerCase().includes(title.toLowerCase()) && 
+    c.artist.toLowerCase().includes(artist.toLowerCase())
+  );
+
+  if (!exists) {
+    downloadQueue.push({
+      searchQuery: `${artist} ${title}`,
+      reqArtist: artist,
+      reqTitle: title,
+      album: '',
+      year: ''
+    });
+  }
+}
+
+async function autoScrapeTrendsAndArtists() {
+  console.log('[Auto-System] Iniciando rastreo por tendencias y artistas...');
+  const currentYear = new Date().getFullYear();
+  const currentMonth = new Date().toLocaleString('es', { month: 'long' });
+
+  // 1. Obtener éxitos de Artistas Preferidos
+  for (const artist of SEED_ARTISTS) {
+    try {
+      const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artist)}&entity=song&limit=10`);
+      if (res.ok) {
+        const data = await res.json();
+        for (const item of (data.results || [])) {
+          addToQueueIfMissing(item.artistName, item.trackName);
+        }
+      }
+    } catch (_) {}
+  }
+
+  // 2. Éxitos virales del Año y Mes
+  try {
+    const query = `Top Hits ${currentMonth} ${currentYear}`;
+    const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=15`);
+    if (res.ok) {
+      const data = await res.json();
+      for (const item of (data.results || [])) {
+        addToQueueIfMissing(item.artistName, item.trackName);
+      }
+    }
+  } catch (_) {}
+
+  // 3. Resguardo por Géneros
+  for (const genre of SEED_GENRES) {
+    try {
+      const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(genre)}&entity=song&limit=5`);
+      if (res.ok) {
+        const data = await res.json();
+        for (const item of (data.results || [])) {
+          addToQueueIfMissing(item.artistName, item.trackName);
+        }
+      }
+    } catch (_) {}
+  }
+
+  console.log(`[Auto-System] ${downloadQueue.length} canciones añadidas a la cola de procesamiento.`);
+  processQueue();
+}
+
+// ============================================================
 // MULTER (UPLOAD)
 // ============================================================
 
@@ -502,6 +627,40 @@ app.get('/health', async (_req, res) => {
     queueSize: downloadQueue.length,
     uptime: process.uptime()
   });
+});
+
+// Endpoint de Búsqueda para Apps (Búsqueda local o Descarga Prioritaria)
+app.get('/api/search', requireApiKey, async (req, res) => {
+  const q = String(req.query.q || '').trim().toLowerCase();
+  if (!q) return res.status(400).json({ error: 'Falta parámetro de búsqueda' });
+
+  await refreshCatalog();
+
+  const matches = catalog.filter(c => 
+    c.title.toLowerCase().includes(q) || c.artist.toLowerCase().includes(q)
+  );
+
+  if (matches.length > 0) {
+    return res.json({ source: 'catalog', data: matches });
+  }
+
+  console.log(`[App Search] Petición externa recibida: "${q}". Añadiendo al frente de la cola...`);
+
+  const task = { searchQuery: q, reqArtist: '', reqTitle: q, album: '', year: '' };
+  const downloadPromise = new Promise((resolve, reject) => {
+    task.resolve = resolve;
+    task.reject = reject;
+  });
+
+  downloadQueue.unshift(task); // Colocar de primero para atender la app
+  processQueue();
+
+  try {
+    const result = await downloadPromise;
+    return res.json({ source: 'downloaded_now', data: [result.track] });
+  } catch (err) {
+    return res.status(500).json({ error: 'Error al descargar la canción requerida', details: err.message });
+  }
 });
 
 app.get('/api/catalog', requireApiKey, async (_req, res) => {
@@ -579,7 +738,11 @@ function startKeepAlive() {
   }, 14 * 60 * 1000);
 }
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`Sekai Music Server corriendo en puerto ${PORT}`);
+  await refreshCatalog();
   startKeepAlive();
+  // Ejecutar scraper automático al iniciar
+  autoScrapeTrendsAndArtists();
 });
+
