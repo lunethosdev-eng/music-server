@@ -1,8 +1,8 @@
 {
   "name": "sekai-music-server",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "private": true,
-  "description": "Servidor de música para Sekai: catálogo, lyrics, upload",
+  "description": "Servidor de música para Sekai: catálogo, lyrics, upload y auto-scrape",
   "main": "server.js",
   "author": "Yyyy",
   "license": "MIT",
@@ -15,11 +15,12 @@
     "test": "node --check server.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.57.0",
     "cors": "^2.8.5",
     "express": "^4.21.0",
     "multer": "^1.4.5-lts.1",
-    "@supabase/supabase-js": "^2.57.0",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "yt-dlp-exec": "^3.0.12"
   },
   "keywords": [
     "sekai",
@@ -27,7 +28,8 @@
     "server",
     "streaming",
     "catalog",
-    "lyrics"
+    "lyrics",
+    "scraper"
   ],
   "repository": {
     "type": "git",
