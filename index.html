@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sekai Music Engine - Console</title>
+  <title>Sekai Music Engine - Pro Console</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
 
     :root {
       --bg: #030508;
-      --card-glass: rgba(13, 17, 23, 0.65);
+      --card-glass: rgba(13, 17, 23, 0.7);
       --card-border: rgba(255, 255, 255, 0.08);
       --card-border-glow: rgba(99, 102, 241, 0.4);
       --accent: #6366f1;
@@ -18,17 +18,16 @@
       --danger: #ef4444;
       --text-main: #f8fafc;
       --text-muted: #64748b;
-      --input-bg: rgba(6, 9, 15, 0.8);
+      --input-bg: rgba(6, 9, 15, 0.85);
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; }
     
     body {
       background-color: var(--bg);
-      /* Cyber Grid Pattern de la imagen de referencia */
       background-image: 
-        linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+        linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
       background-size: 40px 40px;
       color: var(--text-main);
       min-height: 100vh;
@@ -49,7 +48,7 @@
     .nav-container {
       max-width: 1000px;
       margin: 0 auto;
-      background: rgba(15, 20, 32, 0.55);
+      background: rgba(15, 20, 32, 0.6);
       backdrop-filter: blur(20px) saturate(180%);
       -webkit-backdrop-filter: blur(20px) saturate(180%);
       border: 1px solid var(--card-border);
@@ -114,7 +113,6 @@
       box-shadow: 0 4px 20px rgba(255, 255, 255, 0.25);
     }
 
-    /* MAIN CONTAINER */
     main {
       max-width: 1100px;
       margin: 0 auto;
@@ -134,7 +132,6 @@
       to { opacity: 1; transform: translateY(0) scale(1); }
     }
 
-    /* CARDS LIQUID GLASS */
     .card {
       background: var(--card-glass);
       backdrop-filter: blur(16px);
@@ -148,14 +145,6 @@
       overflow: hidden;
     }
 
-    .card::before {
-      content: '';
-      position: absolute;
-      top: 0; left: 0; right: 0; height: 1px;
-      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), transparent);
-    }
-
-    /* SEARCH BAR */
     .search-wrapper {
       position: relative;
       margin-bottom: 28px;
@@ -183,26 +172,25 @@
       box-shadow: 0 0 25px var(--accent-glow);
     }
 
-    /* CATALOG GRID & 3D CARDS */
     .catalog-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
       gap: 20px;
       perspective: 1000px;
     }
 
     .track-card {
-      background: rgba(18, 24, 38, 0.5);
+      background: rgba(18, 24, 38, 0.6);
       border: 1px solid var(--card-border);
       border-radius: 18px;
-      padding: 14px;
+      padding: 16px;
       transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), border-color 0.3s ease, box-shadow 0.3s ease;
       transform-style: preserve-3d;
       position: relative;
     }
 
     .track-card:hover {
-      transform: translateY(-8px) rotateX(4deg) rotateY(-2deg);
+      transform: translateY(-6px) rotateX(3deg);
       border-color: var(--card-border-glow);
       box-shadow: 0 20px 40px rgba(0,0,0,0.6), 0 0 20px var(--accent-glow);
     }
@@ -226,9 +214,66 @@
     .track-card:hover .cover-img { transform: scale(1.05); }
 
     .track-title { font-weight: 700; font-size: 14px; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .track-artist { color: var(--text-muted); font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .track-artist { color: var(--text-muted); font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 12px; }
 
-    /* BUTTONS */
+    /* PLAYER CONTROLS EN CADA CARD */
+    .player-controls {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      background: rgba(0,0,0,0.3);
+      padding: 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.03);
+    }
+
+    .player-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .play-btn {
+      background: var(--accent);
+      border: none;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: #fff;
+      transition: transform 0.2s, background 0.2s;
+      flex-shrink: 0;
+    }
+    .play-btn:hover { transform: scale(1.08); background: #4f46e5; }
+
+    .progress-container {
+      flex: 1;
+      height: 6px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 3px;
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #6366f1, #a855f7);
+      width: 0%;
+      border-radius: 3px;
+      transition: width 0.1s linear;
+    }
+
+    .time-display {
+      font-size: 10px;
+      color: var(--text-muted);
+      font-family: monospace;
+      text-align: right;
+    }
+
     .btn {
       background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
       color: #fff;
@@ -254,10 +299,8 @@
     .btn-danger:hover {
       background: var(--danger);
       color: #fff;
-      box-shadow: 0 10px 20px rgba(239, 68, 68, 0.3);
     }
 
-    /* FORM ELEMENTS */
     .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
     @media (max-width: 768px) { .form-grid { grid-template-columns: 1fr; } }
 
@@ -275,7 +318,6 @@
     }
     input:focus { border-color: var(--accent); }
 
-    /* CODE TERMINAL */
     pre {
       background: #020408;
       border: 1px solid var(--card-border);
@@ -313,7 +355,7 @@
 </head>
 <body>
 
-  <!-- FLOATING LIQUID GLASS NAVIGATION -->
+  <!-- NAVEGACIÓN LIQUID GLASS -->
   <header>
     <div class="nav-container">
       <div class="brand">
@@ -341,13 +383,13 @@
 
   <main>
 
-    <!-- TAB 1: CATÁLOGO DE CANCIONES (SIN ELIMINAR) -->
+    <!-- TAB 1: CATÁLOGO CON REPRODUCTOR INTERACTIVO -->
     <div id="tab-catalog" class="tab-content active">
       <div class="card">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
           <div>
             <h1 style="font-size: 22px; font-weight: 800;">Biblioteca de Pistas</h1>
-            <p style="color: var(--text-muted); font-size: 13px;">Explora el repertorio sincronizado en el servidor.</p>
+            <p style="color: var(--text-muted); font-size: 13px;">Reproduce o busca música almacenada en el servidor en tiempo real.</p>
           </div>
           <span class="badge" id="totalTracksBadge">Cargando...</span>
         </div>
@@ -361,45 +403,57 @@
       </div>
     </div>
 
-    <!-- TAB 2: DOCUMENTACIÓN DE API -->
+    <!-- TAB 2: ENDPOINTS COMPLETOS DE LA API -->
     <div id="tab-api" class="tab-content">
       <div class="card">
         <h2 style="font-size: 18px; font-weight: 700; margin-bottom: 12px;">Clave de Acceso API</h2>
         <div style="display: flex; gap: 10px;">
           <input id="apiKeyDisplay" readonly value="Cargando...">
-          <button class="btn" onclick="copyApiKey()">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-            Copiar
-          </button>
+          <button class="btn" onclick="copyApiKey()">Copiar Clave</button>
         </div>
       </div>
 
       <div class="card">
-        <h2 style="font-size: 18px; font-weight: 700; margin-bottom: 16px;">Consumo de Endpoints</h2>
-        <label>Catálogo Completo</label>
+        <h2 style="font-size: 18px; font-weight: 700; margin-bottom: 16px;">Documentación Completa de Endpoints REST</h2>
+        
+        <label>1. Obtener Catálogo Completo</label>
         <pre>GET /api/catalog?api_key=TU_API_KEY</pre>
-        <label style="margin-top: 14px;">Búsqueda Directa</label>
-        <pre>GET /api/search?q=Nombre+Pista&api_key=TU_API_KEY</pre>
+
+        <label style="margin-top: 14px;">2. Transmitir / Reproducir Archivo de Audio</label>
+        <pre>GET /api/stream/:id?api_key=TU_API_KEY</pre>
+
+        <label style="margin-top: 14px;">3. Búsqueda y Descarga Activa (Scraper / yt-dlp)</label>
+        <pre>GET /api/search?q=Nombre+De+Cancion&api_key=TU_API_KEY</pre>
+
+        <label style="margin-top: 14px;">4. Obtener Letras de una Pista (LRCLIB)</label>
+        <pre>GET /api/tracks/:id/lyrics?api_key=TU_API_KEY</pre>
+
+        <label style="margin-top: 14px;">5. Subir Canción Manualmente (Admin)</label>
+        <pre>POST /api/scrape (Multipart Form: song, cover, title, artist)</pre>
+
+        <label style="margin-top: 14px;">6. Eliminar Canción por ID (Exclusivo Admin)</label>
+        <pre>DELETE /api/tracks/:id?api_key=TU_API_KEY</pre>
+
+        <label style="margin-top: 14px;">7. Limpieza Masiva de Pistas Corruptas</label>
+        <pre>POST /api/clean?api_key=TU_API_KEY</pre>
       </div>
     </div>
 
-    <!-- TAB 3: ADMIN PANEL (CLAVE MIKUTHEGOAT251 / PERMISO DE ELIMINAR) -->
+    <!-- TAB 3: ADMIN PANEL (CLAVE MIKUTHEGOAT251) -->
     <div id="tab-admin" class="tab-content">
       
-      <!-- LOCK SCREEN -->
       <div id="adminLockScreen" class="card" style="text-align: center; padding: 50px 20px;">
         <div style="width: 56px; height: 56px; background: rgba(99, 102, 241, 0.1); border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px;">
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
         </div>
         <h2 style="font-size: 20px; font-weight: 800; margin-bottom: 6px;">Consola de Administración</h2>
-        <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 24px;">Introduce la clave maestra para acceder a la gestión y moderación.</p>
+        <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 24px;">Introduce la clave maestra para moderar y eliminar pistas.</p>
         <div style="max-width: 320px; margin: 0 auto; display: flex; gap: 8px;">
           <input type="password" id="adminPin" placeholder="Contraseña de Admin">
           <button class="btn" onclick="unlockAdmin()">Acceder</button>
         </div>
       </div>
 
-      <!-- DESBLOQUEADO -->
       <div id="adminPanel" style="display: none;">
         
         <div class="card">
@@ -441,8 +495,9 @@
           </form>
         </div>
 
+        <!-- ZONA EXCLUSIVA ADMIN: ELIMINAR CANCIONES -->
         <div class="card">
-          <h2 style="font-size: 18px; font-weight: 700; margin-bottom: 16px;">Gestión y Borrado de Canciones</h2>
+          <h2 style="font-size: 18px; font-weight: 700; margin-bottom: 16px;">Gestión y Borrado de Canciones (Exclusivo Admin)</h2>
           <div class="catalog-grid" id="adminCatalogGrid"></div>
         </div>
 
@@ -457,6 +512,11 @@
     const API_KEY = String(window.SEKAI_API_KEY || '').trim();
     let fullCatalog = [];
     let isAdminUnlocked = false;
+
+    // Control global del elemento de audio actual para evitar reproducción simultánea
+    let currentAudio = null;
+    let currentPlayBtn = null;
+    let currentProgressBar = null;
 
     const headers = () => API_KEY ? { 'x-api-key': API_KEY } : {};
 
@@ -483,7 +543,7 @@
       }
     }
 
-    /* RENDER PARA USUARIOS (SIN BOTÓN DE ELIMINAR) */
+    /* RENDER PARA USUARIOS (CON REPRODUCTOR INTERACTIVO Y SIN BOTÓN DE BORRAR) */
     function renderCatalog(items) {
       const grid = document.getElementById('catalogGrid');
       if (items.length === 0) {
@@ -492,17 +552,29 @@
       }
 
       grid.innerHTML = items.map(track => `
-        <div class="track-card">
+        <div class="track-card" id="card-${track.id}">
           <div class="cover-wrapper">
-            <img class="cover-img" src="${track.cover || 'https://via.placeholder.com/300/090d16/808ea8?text=Sekai'}" alt="Cover" onerror="this.src='https://via.placeholder.com/300/090d16/808ea8?text=Sekai'">
+            <img class="cover-img" src="${track.cover || 'https://via.placeholder.com/300/090d16/808ea8?text=Sekai'}" alt="Cover">
           </div>
           <div class="track-title">${esc(track.title)}</div>
           <div class="track-artist">${esc(track.artist)}</div>
+          
+          <div class="player-controls">
+            <div class="player-row">
+              <button class="play-btn" id="btn-play-${track.id}" onclick="togglePlay('${track.id}')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+              </button>
+              <div class="progress-container" onclick="seekAudio(event, '${track.id}')">
+                <div class="progress-bar" id="prog-${track.id}"></div>
+              </div>
+            </div>
+            <div class="time-display" id="time-${track.id}">0:00</div>
+          </div>
         </div>
       `).join('');
     }
 
-    /* RENDER PARA ADMIN (CON EXCLUSIVIDAD DE ELIMINACIÓN) */
+    /* RENDER PARA ADMIN (CON BOTÓN DE ELIMINAR EXCLUSIVO) */
     function renderAdminCatalog(items) {
       const grid = document.getElementById('adminCatalogGrid');
       grid.innerHTML = items.map(track => `
@@ -512,12 +584,82 @@
           </div>
           <div class="track-title">${esc(track.title)}</div>
           <div class="track-artist">${esc(track.artist)}</div>
-          <button class="btn btn-danger" style="width:100%; margin-top:10px; padding:8px;" onclick="deleteTrack('${track.id}')">
+          <button class="btn btn-danger" style="width:100%; margin-top:12px; padding:8px;" onclick="deleteTrack('${track.id}')">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-            Eliminar
+            Eliminar Canción
           </button>
         </div>
       `).join('');
+    }
+
+    /* CONTROL DE REPRODUCCIÓN AUDIO STREAM */
+    function togglePlay(trackId) {
+      const audioUrl = `/api/stream/${encodeURIComponent(trackId)}${API_KEY ? '?api_key=' + API_KEY : ''}`;
+      const playBtn = document.getElementById(`btn-play-${trackId}`);
+      const progressBar = document.getElementById(`prog-${trackId}`);
+      const timeDisplay = document.getElementById(`time-${trackId}`);
+
+      if (currentAudio && currentAudio.dataset.trackId === trackId) {
+        if (currentAudio.paused) {
+          currentAudio.play();
+          setPlayIcon(playBtn, false);
+        } else {
+          currentAudio.pause();
+          setPlayIcon(playBtn, true);
+        }
+        return;
+      }
+
+      if (currentAudio) {
+        currentAudio.pause();
+        if (currentPlayBtn) setPlayIcon(currentPlayBtn, true);
+      }
+
+      currentAudio = new Audio(audioUrl);
+      currentAudio.dataset.trackId = trackId;
+      currentPlayBtn = playBtn;
+      currentProgressBar = progressBar;
+
+      currentAudio.play().then(() => {
+        setPlayIcon(playBtn, false);
+      }).catch(err => {
+        console.error("Error reproduciendo audio:", err);
+        alert("No se pudo reproducir la pista.");
+      });
+
+      currentAudio.ontimeupdate = () => {
+        if (!currentAudio.duration) return;
+        const percent = (currentAudio.currentTime / currentAudio.duration) * 100;
+        progressBar.style.width = `${percent}%`;
+        timeDisplay.textContent = formatTime(currentAudio.currentTime);
+      };
+
+      currentAudio.onended = () => {
+        setPlayIcon(playBtn, true);
+        progressBar.style.width = '0%';
+        timeDisplay.textContent = '0:00';
+      };
+    }
+
+    function seekAudio(event, trackId) {
+      if (!currentAudio || currentAudio.dataset.trackId !== trackId) return;
+      const rect = event.currentTarget.getBoundingClientRect();
+      const pos = (event.clientX - rect.left) / rect.width;
+      currentAudio.currentTime = pos * currentAudio.duration;
+    }
+
+    function setPlayIcon(btn, isPlay) {
+      if (isPlay) {
+        btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
+      } else {
+        btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
+      }
+    }
+
+    function formatTime(secs) {
+      const m = Math.floor(secs / 60);
+      const s = Math.floor(secs % 60);
+      return `${m}:${s < 10 ? '0' : ''}${s}`;
     }
 
     function filterCatalog() {
