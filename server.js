@@ -7,7 +7,7 @@
  *  - Fix WebSocket (ws) para Node 20
  *  - Keep-alive cada 14 minutos
  *  - Búsqueda automática de covers (iTunes)
- *  - Módulo de Scraping y Descarga de Música (youtube-dl-exec)
+ *  - Módulo de Scraping y Descarga de Música (youtube-dl-exec + Bypass de Bot)
  *  - Mejor logging y validaciones
  * ============================================================
  */
@@ -621,7 +621,7 @@ app.post(
 );
 
 // ============================================================
-// SCRAPING / EXTRACCIÓN AUTOMÁTICA DE MÚSICA
+// SCRAPING / EXTRACCIÓN AUTOMÁTICA DE MÚSICA (CON BYPASS BOT)
 // ============================================================
 
 app.post('/api/scrape', requireApiKey, async (req, res, next) => {
@@ -643,14 +643,26 @@ app.post('/api/scrape', requireApiKey, async (req, res, next) => {
   try {
     console.log(`[Scraper] Iniciando extracción para: "${searchQuery}"`);
 
-    await ytDlp(`ytsearch1:${searchQuery}`, {
+    // Parámetros optimizados para evadir bloqueos de bot en Render
+    const dlpOptions = {
       extractAudio: true,
       audioFormat: 'mp3',
       output: tempFilePath,
       noCheckCertificates: true,
       noWarnings: true,
-      preferFreeFormats: true
-    });
+      preferFreeFormats: true,
+      extractorArgs: 'youtube:player_client=android,web',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    };
+
+    // Si existe archivo cookies.txt en el directorio de datos, se usa automáticamente
+    const cookiesPath = path.join(DATA_DIR, 'cookies.txt');
+    if (fs.existsSync(cookiesPath)) {
+      dlpOptions.cookies = cookiesPath;
+      console.log('[Scraper] Usando cookies.txt');
+    }
+
+    await ytDlp(`ytsearch1:${searchQuery}`, dlpOptions);
 
     if (!fs.existsSync(tempFilePath)) {
       throw new Error('No se pudo generar el archivo de audio descargado');
